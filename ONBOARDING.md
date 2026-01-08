@@ -13,17 +13,20 @@ This repo exists for one reason: build a clean, correct, and testable mHC port o
 We follow the forward semantics used in the CUDA reference repo (AndreSlavescu/mHC.cu):
 
 - The input to this layer is already expanded into streams.
-- The stream mixing matrix is constructed by applying Sinkhorn-Knopp normalization to (I + H_res).
+- The stream mixing matrix is constructed by applying Sinkhorn-Knopp normalization to exp(H_res_raw).
 - There is an aggregate -> RMSNorm -> distribute branch that produces a per-stream additive term.
 - The output is stream_mix(x_expanded, M) + y_dist.
+- Identity-friendly init uses off-diagonal H_res_raw logits around -12 and H_pre_raw/H_post_raw around -12.
 
 Equations with x_expanded in R^{B x n x C}:
 
 ```
-M = sinkhorn_knopp(I + H_res) where H_res in R^{n x n}
-y_agg[b, c] = sum_i H_pre[i] * x_expanded[b, i, c]
+H_pre_act = sigmoid(H_pre_raw)
+H_post_act = 2 * sigmoid(H_post_raw)
+M = sinkhorn_knopp(exp(H_res_raw)) where H_res_raw in R^{n x n}
+y_agg[b, c] = sum_i H_pre_act[i] * x_expanded[b, i, c]
 y_norm[b, c] = rms_norm(y_agg[b, :], weight, eps)
-y_dist[b, i, c] = H_post[i] * y_norm[b, c]
+y_dist[b, i, c] = H_post_act[i] * y_norm[b, c]
 x_mixed[b, i, c] = sum_j M[i, j] * x_expanded[b, j, c]
 out = x_mixed + y_dist
 ```
@@ -38,13 +41,14 @@ out = x_mixed + y_dist
   - stream_mix_ref
 
 - `kernels/sinkhorn_knopp.metal`
-  - Metal kernel body that projects (I + H_res) onto the Birkhoff polytope
+  - Metal kernel body that projects exp(H_res_raw) onto the Birkhoff polytope
 
 - `kernels/mhc_fused.metal`
   - Metal kernel body that fuses:
     - stream aggregate + RMSNorm
     - stream mix: out[b,i,c] = sum_j M[i,j] * x[b,j,c]
-    - add: out += H_post[i] * y_norm[b,c]
+    - add: out += H_post_act[i] * y_norm[b,c]
+  - Includes an unrolled fast path for n=4
 
 - `kernels/stream_mix_add.metal`
   - Legacy Metal kernel body that fuses stream mix + add(y_dist)
@@ -61,7 +65,7 @@ out = x_mixed + y_dist
   - Runs reference vs Metal checks and prints max error
 
 - `benchmark.py`
-  - Microbenchmark and threads_per_group tuner
+  - Benchmark suite with correctness checks and JSONL output
 
 ## Installation
 
@@ -108,14 +112,18 @@ To measure something meaningful:
 - Keep n small (4, 8, or 16 are tested).
 - Benchmark with C in the same ballpark as your real model hidden size.
 - Use large enough B to amortize launch overhead.
-- Tune threads_per_group (see benchmark output) to match your shape.
-- You can also set threads_per_group=None to use a simple heuristic based on C.
+- Use throughput mode for steady-state speed and latency mode for per-call cost.
+- Override threads_per_group if you want a fixed launch size; otherwise a heuristic is used.
 
 Run:
 
 ```
 python benchmark.py
 ```
+
+The benchmark writes one JSON dict per line to results.jsonl.
+
+Tip: for latency mode, `MLX_METAL_FAST_SYNCH=1` can reduce sync overhead variance.
 
 If you want to see the generated Metal source for debugging:
 

@@ -82,6 +82,7 @@ def _sinkhorn_source(max_n: int, iters: int, eps: float) -> str:
     return _render_source(
         _SINKHORN_PATH,
         MAX_N=str(int(max_n)),
+        MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
         ITERS=str(int(iters)),
         EPS=_format_float_literal(eps),
     )
@@ -191,16 +192,16 @@ def stream_mix_add_metal(
 
 
 def sinkhorn_knopp_metal(
-    H_res: mx.array,
+    H_res_raw: mx.array,
     iters: int = 20,
     eps: float = 1e-5,
     threads_per_group: int = 64,
     verbose: bool = False,
 ) -> mx.array:
-    """Compute M = sinkhorn_knopp(I + H_res) using a Metal kernel.
+    """Compute M = sinkhorn_knopp(exp(H_res_raw)) using a Metal kernel.
 
     Args:
-        H_res: [n, n] residual matrix
+        H_res_raw: [n, n] residual logits
         iters: number of Sinkhorn iterations
         eps: stability epsilon
         threads_per_group: threadgroup size along x
@@ -209,10 +210,10 @@ def sinkhorn_knopp_metal(
     Returns:
         M: [n, n] float32
     """
-    if H_res.ndim != 2 or H_res.shape[0] != H_res.shape[1]:
-        raise ValueError(f"H_res must be square [n, n], got shape {H_res.shape}")
+    if H_res_raw.ndim != 2 or H_res_raw.shape[0] != H_res_raw.shape[1]:
+        raise ValueError(f"H_res_raw must be square [n, n], got shape {H_res_raw.shape}")
 
-    n = _validate_n(H_res.shape[0])
+    n = _validate_n(H_res_raw.shape[0])
     if threads_per_group <= 0:
         raise ValueError("threads_per_group must be positive")
     if threads_per_group > _MAX_TPG_ALLOWED:
@@ -221,7 +222,7 @@ def sinkhorn_knopp_metal(
     if verbose:
         _maybe_print_source(_sinkhorn_source(n, iters, eps), "sinkhorn_knopp", verbose=True)
 
-    H_f = H_res.astype(mx.float32)
+    H_f = H_res_raw.astype(mx.float32)
 
     kernel = _sinkhorn_kernel(n, int(iters), float(eps))
     out = kernel(
@@ -250,8 +251,8 @@ def mhc_forward_fused_metal(
     Args:
         x: [B, n, C] float32, row contiguous
         M: [n, n] float32
-        H_pre: [n] float32
-        H_post: [n] float32
+        H_pre: [n] float32 (activated)
+        H_post: [n] float32 (activated)
         rms_weight: [C] float32
         eps: RMSNorm epsilon
         threads_per_group: threadgroup size along x

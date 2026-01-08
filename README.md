@@ -10,10 +10,12 @@ MLX implementation of mHC (Manifold-Constrained Hyper-Connections) with:
 Matches CUDA reference semantics:
 
 ```
-M = sinkhorn_knopp(I + H_res)
-y_agg[b, c] = sum_i H_pre[i] * x_expanded[b, i, c]
+H_pre_act = sigmoid(H_pre_raw)
+H_post_act = 2 * sigmoid(H_post_raw)
+M = sinkhorn_knopp(exp(H_res_raw))
+y_agg[b, c] = sum_i H_pre_act[i] * x_expanded[b, i, c]
 y_norm[b, c] = rms_norm(y_agg[b, :], weight, eps)
-y_dist[b, i, c] = H_post[i] * y_norm[b, c]
+y_dist[b, i, c] = H_post_act[i] * y_norm[b, c]
 x_mixed[b, i, c] = sum_j M[i, j] * x_expanded[b, j, c]
 out = x_mixed + y_dist
 ```
@@ -58,18 +60,25 @@ print(y.shape)  # (B, n, C)
 ## Benchmarking
 
 ```
-# Tune threads_per_group for your shape
-python benchmark.py --B 64 --n 8 --C 2048
+# Sweep shapes and dtypes, write JSONL results
+python benchmark.py --B 1,8 --n 4,8,16 --C 512,1024 --dtypes bfloat16,float32 --out results.jsonl
 
-# Skip tuning and use a heuristic threads_per_group
-python benchmark.py --B 64 --n 8 --C 2048 --no-tune
+# Throughput (async) vs latency (sync) modes
+python benchmark.py --mode throughput
+python benchmark.py --mode latency
+
+# Override threads_per_group (default uses a heuristic)
+python benchmark.py --threads-per-group 128
+
+# Optional: reduce sync overhead variance for latency mode
+MLX_METAL_FAST_SYNCH=1 python benchmark.py --mode latency
 ```
 
 ## Notes
 
-- MHCLayer defaults to identity-friendly initialization. Pass identity_init=False for legacy ones/eye init.
+- MHCLayer defaults to identity-friendly initialization under exp-parameterization (off-diagonal logits ~ -12). Pass identity_init=False for zero-init logits.
 - Metal kernels default to n <= 64 (see `_MAX_N_ALLOWED` in `mhc_mlx/metal.py`). Raise the limit and rerun tests if needed.
-- Use `python benchmark.py` to tune threads_per_group for your target shape, or pass threads_per_group=None for a simple heuristic.
+- `benchmark.py` writes one JSON dict per line to results.jsonl; include it in your reports.
 - The Metal path is intended for inference and benchmarking. For training, start with the reference path.
 - The first run includes Metal JIT compilation overhead.
 
@@ -82,4 +91,4 @@ python benchmark.py --B 64 --n 8 --C 2048 --no-tune
 - `kernels/mhc_fused.metal`: fused aggregate + RMSNorm + mix + add kernel body
 - `kernels/stream_mix_add.metal`: legacy fused stream_mix + add(y_dist) kernel body
 - `test_correctness.py`: reference vs Metal comparisons
-- `benchmark.py`: microbenchmark and threads_per_group tuner
+- `benchmark.py`: benchmark suite with correctness checks and JSONL output

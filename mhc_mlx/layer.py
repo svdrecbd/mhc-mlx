@@ -2,10 +2,12 @@
 
 The forward semantics match the CUDA reference implementation:
 
-- M = sinkhorn_knopp(H_res)
-- y_agg = stream_aggregate(x_expanded, H_pre)
+- H_pre_act = sigmoid(H_pre_raw)
+- H_post_act = 2 * sigmoid(H_post_raw)
+- M = sinkhorn_knopp(exp(H_res_raw))
+- y_agg = stream_aggregate(x_expanded, H_pre_act)
 - y_norm = rms_norm(y_agg, rms_weight, eps)
-- y_dist = stream_distribute(y_norm, H_post)
+- y_dist = stream_distribute(y_norm, H_post_act)
 - out = stream_mix(x_expanded, M) + y_dist
 
 The Metal fast path uses custom kernels for Sinkhorn and a fused RMSNorm/mix/add pass.
@@ -18,11 +20,9 @@ import mlx.nn as nn
 
 from .metal import mhc_forward_fused_metal, sinkhorn_knopp_metal, suggest_threads_per_group
 from .reference import (
+    activate_pre_post,
     mhc_forward_reference,
-    mixing_matrix_from_residual,
-    rms_norm,
-    stream_aggregate,
-    stream_distribute,
+    mixing_matrix_from_logits,
 )
 
 
@@ -58,18 +58,22 @@ class MHCLayer(nn.Module):
         # Trainable parameters (MLX treats public mx.array attributes as parameters)
         # Identity-friendly initialization keeps signal propagation well-conditioned.
         if self.identity_init:
-            self.H_pre = mx.zeros((self.n,), dtype=mx.float32)
-            self.H_post = mx.zeros((self.n,), dtype=mx.float32)
-            self.H_res = mx.zeros((self.n, self.n), dtype=mx.float32)
+            off_diag = 12.0
+            self.H_pre_raw = mx.full((self.n,), -off_diag, dtype=mx.float32)
+            self.H_post_raw = mx.full((self.n,), -off_diag, dtype=mx.float32)
+            self.H_res_raw = (
+                mx.full((self.n, self.n), -off_diag, dtype=mx.float32)
+                + mx.eye(self.n, dtype=mx.float32) * off_diag
+            )
         else:
-            self.H_pre = mx.ones((self.n,), dtype=mx.float32)
-            self.H_post = mx.ones((self.n,), dtype=mx.float32)
-            self.H_res = mx.eye(self.n, dtype=mx.float32)
+            self.H_pre_raw = mx.zeros((self.n,), dtype=mx.float32)
+            self.H_post_raw = mx.zeros((self.n,), dtype=mx.float32)
+            self.H_res_raw = mx.zeros((self.n, self.n), dtype=mx.float32)
         self.rms_weight = mx.ones((self.C,), dtype=mx.float32)
 
     def mixing_matrix(self) -> mx.array:
         """Return the current mixing matrix M (after Sinkhorn)."""
-        return mixing_matrix_from_residual(self.H_res, iters=self.sinkhorn_iters, eps=self.eps)
+        return mixing_matrix_from_logits(self.H_res_raw, iters=self.sinkhorn_iters, eps=self.eps)
 
     def __call__(self, x_expanded: mx.array, *, return_dtype: mx.Dtype | None = None) -> mx.array:
         """Run the mHC layer.
@@ -92,9 +96,9 @@ class MHCLayer(nn.Module):
         if not self.use_metal:
             out = mhc_forward_reference(
                 x_expanded=x_expanded,
-                H_pre=self.H_pre,
-                H_post=self.H_post,
-                H_res=self.H_res,
+                H_pre_raw=self.H_pre_raw,
+                H_post_raw=self.H_post_raw,
+                H_res_raw=self.H_res_raw,
                 rms_weight=self.rms_weight,
                 sinkhorn_iters=self.sinkhorn_iters,
                 eps=self.eps,
@@ -102,17 +106,18 @@ class MHCLayer(nn.Module):
         else:
             # Use Metal kernels for Sinkhorn + fused RMSNorm/mix/add.
             M = sinkhorn_knopp_metal(
-                self.H_res,
+                self.H_res_raw,
                 iters=self.sinkhorn_iters,
                 eps=self.eps,
                 threads_per_group=self.threads_per_group,
                 verbose=False,
             )
+            H_pre_act, H_post_act = activate_pre_post(self.H_pre_raw, self.H_post_raw)
             out = mhc_forward_fused_metal(
                 x=x_expanded,
                 M=M,
-                H_pre=self.H_pre,
-                H_post=self.H_post,
+                H_pre=H_pre_act,
+                H_post=H_post_act,
                 rms_weight=self.rms_weight,
                 eps=self.eps,
                 threads_per_group=self.threads_per_group,

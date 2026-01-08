@@ -6,9 +6,9 @@ They are the source of truth for correctness; the Metal kernel must match them.
 Shapes
 
 - x_expanded: [B, n, C] (row contiguous)
-- H_pre: [n]
-- H_post: [n]
-- H_res: [n, n] residual (added to identity before Sinkhorn)
+- H_pre_raw: [n]
+- H_post_raw: [n]
+- H_res_raw: [n, n] (logits)
 - weight: [C]
 """
 
@@ -17,7 +17,7 @@ from __future__ import annotations
 import mlx.core as mx
 
 
-def sinkhorn_knopp(H_res: mx.array, iters: int = 20, eps: float = 1e-5) -> mx.array:
+def sinkhorn_knopp(H: mx.array, iters: int = 20, eps: float = 1e-5) -> mx.array:
     """Sinkhorn-Knopp normalization.
 
     Matches the CUDA reference behavior:
@@ -25,14 +25,14 @@ def sinkhorn_knopp(H_res: mx.array, iters: int = 20, eps: float = 1e-5) -> mx.ar
     - column normalization: if col_sum <= eps, zero that column
 
     Args:
-        H_res: [n, n] matrix (typically positive)
+        H: [n, n] matrix (typically positive)
         iters: number of Sinkhorn iterations
         eps: stability epsilon
 
     Returns:
         P: [n, n] approximately doubly-stochastic matrix
     """
-    P = H_res.astype(mx.float32)
+    P = H.astype(mx.float32)
 
     for _ in range(iters):
         # Row normalization
@@ -48,16 +48,22 @@ def sinkhorn_knopp(H_res: mx.array, iters: int = 20, eps: float = 1e-5) -> mx.ar
     return P
 
 
-def mixing_matrix_from_residual(H_res: mx.array, iters: int = 20, eps: float = 1e-5) -> mx.array:
-    """Project a residual matrix onto the Birkhoff polytope via Sinkhorn.
+def activate_pre_post(H_pre_raw: mx.array, H_post_raw: mx.array) -> tuple[mx.array, mx.array]:
+    """Apply CUDA-style activations for pre/post scalars."""
+    H_pre_act = mx.sigmoid(H_pre_raw.astype(mx.float32))
+    H_post_act = 2.0 * mx.sigmoid(H_post_raw.astype(mx.float32))
+    return H_pre_act, H_post_act
 
-    The parameterization is residual around identity:
-    M = sinkhorn_knopp(I + H_res).
+
+def mixing_matrix_from_logits(H_res_raw: mx.array, iters: int = 20, eps: float = 1e-5) -> mx.array:
+    """Project logits onto the Birkhoff polytope via Sinkhorn.
+
+    The parameterization is:
+    M = sinkhorn_knopp(exp(H_res_raw)).
     """
-    if H_res.ndim != 2 or H_res.shape[0] != H_res.shape[1]:
-        raise ValueError(f"H_res must be square [n, n], got shape {H_res.shape}")
-    n = H_res.shape[0]
-    H = H_res + mx.eye(n, dtype=H_res.dtype)
+    if H_res_raw.ndim != 2 or H_res_raw.shape[0] != H_res_raw.shape[1]:
+        raise ValueError(f"H_res_raw must be square [n, n], got shape {H_res_raw.shape}")
+    H = mx.exp(H_res_raw.astype(mx.float32))
     return sinkhorn_knopp(H, iters=iters, eps=eps)
 
 
@@ -68,7 +74,7 @@ def stream_aggregate(x_expanded: mx.array, H_pre: mx.array) -> mx.array:
 
     Args:
         x_expanded: [B, n, C]
-        H_pre: [n]
+        H_pre: [n] (activated)
 
     Returns:
         y_agg: [B, C]
@@ -104,7 +110,7 @@ def stream_distribute(y_norm: mx.array, H_post: mx.array) -> mx.array:
 
     Args:
         y_norm: [B, C]
-        H_post: [n]
+        H_post: [n] (activated)
 
     Returns:
         y_dist: [B, n, C]
@@ -139,9 +145,9 @@ def stream_mix_ref(x_expanded: mx.array, M: mx.array) -> mx.array:
 
 def mhc_forward_reference(
     x_expanded: mx.array,
-    H_pre: mx.array,
-    H_post: mx.array,
-    H_res: mx.array,
+    H_pre_raw: mx.array,
+    H_post_raw: mx.array,
+    H_res_raw: mx.array,
     rms_weight: mx.array,
     sinkhorn_iters: int = 20,
     eps: float = 1e-5,
@@ -151,9 +157,10 @@ def mhc_forward_reference(
     Returns:
         out: [B, n, C]
     """
-    M = mixing_matrix_from_residual(H_res, iters=sinkhorn_iters, eps=eps)
-    y_agg = stream_aggregate(x_expanded, H_pre)
+    H_pre_act, H_post_act = activate_pre_post(H_pre_raw, H_post_raw)
+    M = mixing_matrix_from_logits(H_res_raw, iters=sinkhorn_iters, eps=eps)
+    y_agg = stream_aggregate(x_expanded, H_pre_act)
     y_norm = rms_norm(y_agg, rms_weight, eps=eps)
-    y_dist = stream_distribute(y_norm, H_post)
+    y_dist = stream_distribute(y_norm, H_post_act)
     x_mixed = stream_mix_ref(x_expanded, M)
     return x_mixed + y_dist
