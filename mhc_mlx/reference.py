@@ -20,7 +20,7 @@ import mlx.core as mx
 def sinkhorn_knopp(H: mx.array, iters: int = 20, eps: float = 1e-5) -> mx.array:
     """Sinkhorn-Knopp normalization.
 
-    Matches the CUDA reference behavior:
+    Matches the reference behavior used in this repo:
     - row normalization: if row_sum <= eps, leave the row unchanged
     - column normalization: if col_sum <= eps, zero that column
 
@@ -49,7 +49,7 @@ def sinkhorn_knopp(H: mx.array, iters: int = 20, eps: float = 1e-5) -> mx.array:
 
 
 def activate_pre_post(H_pre_raw: mx.array, H_post_raw: mx.array) -> tuple[mx.array, mx.array]:
-    """Apply CUDA-style activations for pre/post scalars."""
+    """Apply project activations for pre/post scalars."""
     H_pre_act = mx.sigmoid(H_pre_raw.astype(mx.float32))
     H_post_act = 2.0 * mx.sigmoid(H_post_raw.astype(mx.float32))
     return H_pre_act, H_post_act
