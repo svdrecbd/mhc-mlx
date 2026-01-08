@@ -10,7 +10,7 @@ This repo exists for one reason: build a clean, correct, and testable mHC port o
 
 ## Semantics
 
-We follow the forward semantics used in the CUDA reference repo (AndreSlavescu/mHC.cu):
+We follow the forward semantics used in this repo:
 
 - The input to this layer is already expanded into streams.
 - The stream mixing matrix is constructed by applying Sinkhorn-Knopp normalization to exp(H_res_raw).
@@ -114,6 +114,8 @@ To measure something meaningful:
 - Use large enough B to amortize launch overhead.
 - Use throughput mode for steady-state speed and latency mode for per-call cost.
 - Override threads_per_group if you want a fixed launch size; otherwise a heuristic is used.
+- Use repeats + p10/p90 to avoid outliers, and queue-guard to avoid enqueue-only timing.
+- Use `--metal-dispatch auto` to benchmark the default auto-dispatch behavior.
 
 Run:
 
@@ -121,7 +123,14 @@ Run:
 python benchmark.py
 ```
 
-The benchmark writes one JSON dict per line to results.jsonl.
+By default this runs both throughput and latency modes and writes one JSON dict per line to results.jsonl.
+
+Summarize and plot:
+
+```
+python scripts/summarize_benchmarks.py --in results.jsonl
+python scripts/plot_benchmark_speedup.py --summary summary_by_C.csv
+```
 
 Tip: for latency mode, `MLX_METAL_FAST_SYNCH=1` can reduce sync overhead variance.
 
@@ -136,7 +145,7 @@ If you want to see the generated Metal source for debugging:
   - keep using the reference path for training, or
   - implement a custom_function VJP (see MLX docs on custom_function and Grid Sample VJP).
 
-- For inference, use_metal=True is fine and is the intended use.
+- For inference, use_metal=True is fine and is the intended use. Auto-dispatch defaults to Metal for n <= 16 and uses a hybrid path for n == 32, B == 1, C >= 1024 (MLX aggregate/RMS/distribute + Metal mix/add). Set auto_dispatch=False to force the fused Metal path.
 
 ## Extending This Repo
 

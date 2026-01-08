@@ -2,3 +2,7 @@
 __pycache__/
 *.pyc
 .DS_Store
+results*.jsonl
+summary_*.csv
+benchmark_speedup_*.png
+benchmark_speedup_*.svg

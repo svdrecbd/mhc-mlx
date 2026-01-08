@@ -7,7 +7,7 @@ MLX implementation of mHC (Manifold-Constrained Hyper-Connections) with:
 
 ## Forward Pass
 
-Matches CUDA reference semantics:
+Forward semantics used throughout this repo:
 
 ```
 H_pre_act = sigmoid(H_pre_raw)
@@ -60,25 +60,40 @@ print(y.shape)  # (B, n, C)
 ## Benchmarking
 
 ```
-# Sweep shapes and dtypes, write JSONL results
+# Sweep shapes and dtypes, write JSONL results (throughput + latency by default)
 python benchmark.py --B 1,8 --n 4,8,16 --C 512,1024 --dtypes bfloat16,float32 --out results.jsonl
 
 # Throughput (async) vs latency (sync) modes
+python benchmark.py --modes throughput,latency
 python benchmark.py --mode throughput
 python benchmark.py --mode latency
 
 # Override threads_per_group (default uses a heuristic)
 python benchmark.py --threads-per-group 128
 
+# More stable timings (median + p10/p90 with queue guard)
+python benchmark.py --repeats 5 --queue-guard 50
+
+# Measure default auto-dispatch behavior (includes hybrid latency path)
+python benchmark.py --metal-dispatch auto
+
 # Optional: reduce sync overhead variance for latency mode
 MLX_METAL_FAST_SYNCH=1 python benchmark.py --mode latency
+
+# Summarize and plot results
+python scripts/summarize_benchmarks.py --in results.jsonl
+# If you have separate files, pass a comma list
+python scripts/summarize_benchmarks.py --in results.jsonl,results_latency.jsonl
+# Speedup is reference / metal (higher is faster)
+python scripts/plot_benchmark_speedup.py --summary summary_by_C.csv
 ```
 
 ## Notes
 
 - MHCLayer defaults to identity-friendly initialization under exp-parameterization (off-diagonal logits ~ -12). Pass identity_init=False for zero-init logits.
 - Metal kernels default to n <= 64 (see `_MAX_N_ALLOWED` in `mhc_mlx/metal.py`). Raise the limit and rerun tests if needed.
-- `benchmark.py` writes one JSON dict per line to results.jsonl; include it in your reports.
+- `benchmark.py` writes one JSON dict per line to results.jsonl with median/p10/p90 timings; include it in your reports.
+- Auto-dispatch uses Metal for n <= 16 and a hybrid path for n == 32, B == 1, C >= 1024 (latency-sensitive). The hybrid path computes aggregate/RMS/distribute in MLX and uses Metal for mix+add. Set `auto_dispatch=False` to force the fused Metal path.
 - The Metal path is intended for inference and benchmarking. For training, start with the reference path.
 - The first run includes Metal JIT compilation overhead.
 

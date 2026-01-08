@@ -9,6 +9,10 @@ def max_abs(a: mx.array, b: mx.array) -> float:
     return float(mx.max(mx.abs(a - b)).item())
 
 
+def max_abs_val(a: mx.array) -> float:
+    return float(mx.max(mx.abs(a)).item())
+
+
 def identity_residual(n: int, off_diag: float = 12.0) -> mx.array:
     return mx.full((n, n), -off_diag, dtype=mx.float32) + mx.eye(n, dtype=mx.float32) * off_diag
 
@@ -166,7 +170,13 @@ def test_layer_forward(use_metal: bool):
     mx.random.seed(42)
 
     B, n, C = 2, 4, 256
-    layer = MHCLayer(n=n, C=C, use_metal=use_metal)
+    layer = MHCLayer(
+        n=n,
+        C=C,
+        use_metal=use_metal,
+        auto_dispatch=not use_metal,
+        compile_reference=False,
+    )
 
     # Make parameters deterministic and non-degenerate.
     layer.H_pre_raw = mx.ones((n,), dtype=mx.float32)
@@ -178,6 +188,113 @@ def test_layer_forward(use_metal: bool):
     y = layer(x)
     mx.eval(y)
     return y, layer, x
+
+
+def test_guardrail_shapes():
+    cases = [
+        (1, 4, 64),
+        (2, 8, 128),
+        (2, 16, 256),
+        (1, 32, 256),
+    ]
+    tol_abs = 1e-4
+    tol_rel = 1e-4
+
+    for idx, (B, n, C) in enumerate(cases, start=1):
+        mx.random.seed(100 + idx)
+        x = mx.random.normal((B, n, C)).astype(mx.bfloat16)
+
+        H_pre_raw = mx.random.normal((n,)).astype(mx.float32)
+        H_post_raw = mx.random.normal((n,)).astype(mx.float32)
+        H_res_raw = mx.random.normal((n, n)).astype(mx.float32)
+        rms_weight = mx.ones((C,), dtype=mx.float32)
+
+        ref = MHCLayer(
+            n=n,
+            C=C,
+            use_metal=False,
+            compile_reference=False,
+        )
+        metal = MHCLayer(
+            n=n,
+            C=C,
+            use_metal=True,
+            auto_dispatch=False,
+            compile_reference=False,
+        )
+
+        ref.H_pre_raw = H_pre_raw
+        ref.H_post_raw = H_post_raw
+        ref.H_res_raw = H_res_raw
+        ref.rms_weight = rms_weight
+
+        metal.H_pre_raw = H_pre_raw
+        metal.H_post_raw = H_post_raw
+        metal.H_res_raw = H_res_raw
+        metal.rms_weight = rms_weight
+
+        y_ref = ref(x)
+        y_metal = metal(x)
+        mx.eval(y_ref)
+        mx.eval(y_metal)
+        mx.synchronize()
+
+        max_err = max_abs(y_ref, y_metal)
+        rel_err = max_err / max(max_abs_val(y_ref), 1e-8)
+        print(f"guardrail case {idx}: B={B} n={n} C={C} max_abs={max_err:.6e} rel={rel_err:.6e}")
+        assert max_err < tol_abs
+        assert rel_err < tol_rel
+
+
+def test_hybrid_latency_corner():
+    mx.random.seed(7)
+
+    B, n, C = 1, 32, 1024
+    x = mx.random.normal((B, n, C)).astype(mx.bfloat16)
+
+    H_pre_raw = mx.random.normal((n,)).astype(mx.float32)
+    H_post_raw = mx.random.normal((n,)).astype(mx.float32)
+    H_res_raw = mx.random.normal((n, n)).astype(mx.float32)
+    rms_weight = mx.ones((C,), dtype=mx.float32)
+
+    ref = MHCLayer(
+        n=n,
+        C=C,
+        use_metal=False,
+        compile_reference=False,
+    )
+    auto = MHCLayer(
+        n=n,
+        C=C,
+        use_metal=True,
+        auto_dispatch=True,
+        compile_reference=False,
+        hybrid_latency=True,
+    )
+
+    ref.H_pre_raw = H_pre_raw
+    ref.H_post_raw = H_post_raw
+    ref.H_res_raw = H_res_raw
+    ref.rms_weight = rms_weight
+
+    auto.H_pre_raw = H_pre_raw
+    auto.H_post_raw = H_post_raw
+    auto.H_res_raw = H_res_raw
+    auto.rms_weight = rms_weight
+
+    y_ref = ref(x)
+    y_auto = auto(x)
+    mx.eval(y_ref)
+    mx.eval(y_auto)
+    mx.synchronize()
+
+    max_err = max_abs(y_ref, y_auto)
+    rel_err = max_err / max(max_abs_val(y_ref), 1e-8)
+    print(f"hybrid latency corner max_abs={max_err:.6e} rel={rel_err:.6e}")
+    assert max_err < 1e-4
+    assert rel_err < 1e-4
+
+
 
 
 def main():
@@ -210,6 +327,12 @@ def main():
     # Tolerance is tight because both routes use float32 for the mix.
     # If you change dtypes or add fusions, widen this only if justified.
     assert err < 1e-5
+
+    print("\n--- Testing guardrail shape sweep ---")
+    test_guardrail_shapes()
+
+    print("\n--- Testing hybrid latency corner ---")
+    test_hybrid_latency_corner()
 
     print("\nAll correctness tests passed.")
 
