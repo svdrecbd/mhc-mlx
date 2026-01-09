@@ -57,15 +57,15 @@ Auto-dispatch benchmark (speedup = reference / Metal, >1 is faster):
 - Sweep: B={1,8}, n={4,8,16,32}, C={512,1024,2048,4096}, dtype=float16,float32
 - Settings: iters=100, warmup=10, repeats=3, queue_guard=50, hybrid_latency=on, fused_backward=on, with_backward=on
 - Backward compiled: off (benchmark disables mx.compile for backward when fused_backward=on)
-- Latency corner (B=1, n=32, C>=1024): reference fallback (by construction)
+- Latency corner (B=1, n=32): hybrid path by default; compiled reference fallback when `hybrid_latency` is off
 - Results are hardware-specific; rerun on your machine for final numbers.
 
 End-to-end MHCLayer (auto-dispatch, median speedup with p10-p90):
 
 | Mode       | Forward | Backward |
 |------------|---------|----------|
-| Throughput | 2.44x (0.94-7.08) | 3.95x (1.05-11.29) |
-| Latency    | 0.94x (0.53-1.86) | 1.45x (0.74-3.55) |
+| Throughput | 2.56x (0.95-7.39) | 2.87x (0.80-10.03) |
+| Latency    | 0.78x (0.37-1.87) | 1.15x (0.37-3.10) |
 
 ## Usage
 
@@ -99,8 +99,9 @@ out = x_mixed + y_dist
 
 ## Notes
 
-- Auto-dispatch uses Metal for n <= 16 and falls back to the compiled reference path for n == 32, B == 1 (latency-sensitive). Set `hybrid_latency=False` to force the fused Metal path.
+- Auto-dispatch uses fused Metal for most shapes; for the latency corner (n == 32, B == 1) it uses the hybrid path by default or the compiled reference fallback when `hybrid_latency` is off. Use `--metal-dispatch force` to always use fused Metal.
 - Backward uses Metal kernels (no reference VJPs). Use `--no-fused-backward` if you want backward compatible with `mx.compile`.
+- With auto-dispatch, backward prefers the non-fused kernels for small batches (B < 8) to avoid under-occupancy; use `--metal-dispatch force` to force fused backward.
 - MHCLayer defaults to identity-friendly initialization under exp-parameterization (off-diagonal logits ~ -12). Pass identity_init=False for zero-init logits.
 - Metal kernels default to n <= 64 (see `_MAX_N_ALLOWED` in `mhc_mlx/metal.py`). Raise the limit and rerun tests if needed.
 - The first run includes Metal JIT compilation overhead.

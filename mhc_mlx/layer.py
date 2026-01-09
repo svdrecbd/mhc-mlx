@@ -12,8 +12,8 @@ The forward semantics match the reference implementation in this repo:
 
 The Metal fast path uses custom kernels for Sinkhorn and a fused RMSNorm/mix/add pass.
 Backward uses Metal kernels (no reference VJPs).
-Auto-dispatch defaults to Metal for n <= 16 and uses a latency-friendly reference
-fallback for n == 32, B == 1.
+Auto-dispatch defaults to Metal for n <= 16 and uses a latency-friendly hybrid
+path for n == 32, B == 1 (or reference fallback if hybrid is disabled).
 """
 
 from __future__ import annotations
@@ -111,9 +111,17 @@ class MHCLayer(nn.Module):
         return n == 32 and B == 1
 
     def _should_use_reference_fallback(self, B: int, n: int, C: int) -> bool:
-        if not self.use_metal or not self.auto_dispatch or not self.hybrid_latency:
+        if not self.use_metal or not self.auto_dispatch or self.hybrid_latency:
             return False
         return n == 32 and B == 1
+
+    def _should_use_fused_backward(self, B: int, n: int, C: int) -> bool:
+        if not self.fused_backward:
+            return False
+        if not self.auto_dispatch:
+            return True
+        # Small batches under-occupy the fused backward kernel.
+        return B >= 8
 
     def _reference_forward(
         self,
@@ -224,7 +232,7 @@ class MHCLayer(nn.Module):
                 rms_weight=self.rms_weight,
                 eps=self.eps,
                 threads_per_group=self.threads_per_group,
-                fused_backward=self.fused_backward,
+                fused_backward=self._should_use_fused_backward(B, n, C),
                 verbose=False,
             )
         else:

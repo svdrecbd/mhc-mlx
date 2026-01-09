@@ -154,7 +154,8 @@ If you want to see the generated Metal source for debugging:
   The Metal path exposes gradients via Metal backward kernels (no reference VJPs).
   If you need `mx.compile` on the backward pass, set fused_backward=False to use the non-fused kernels.
 
-- For inference, use_metal=True is fine and is the intended use. Auto-dispatch defaults to Metal for n <= 16 and falls back to the compiled reference path for n == 32, B == 1 (latency-sensitive). Set hybrid_latency=False to force the fused Metal path.
+- For inference, use_metal=True is fine and is the intended use. Auto-dispatch uses fused Metal for most shapes; for the latency corner (n == 32, B == 1) it uses the hybrid path by default or the compiled reference fallback when `hybrid_latency` is off. Use `auto_dispatch=False` to force fused Metal.
+- With auto-dispatch, backward prefers the non-fused kernels for small batches (B < 8) to avoid under-occupancy; set `auto_dispatch=False` to force fused backward.
 
 ## Extending This Repo
 

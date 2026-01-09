@@ -16,12 +16,16 @@ from mhc_mlx.metal import (
     sinkhorn_knopp_metal,
     sinkhorn_knopp_metal_autograd,
     suggest_threads_per_group,
+    stream_mix_add_metal_autograd,
 )
 from mhc_mlx.reference import (
     activate_pre_post,
     mhc_forward_fused_reference,
     mhc_forward_reference,
     mixing_matrix_from_logits,
+    rms_norm,
+    stream_aggregate,
+    stream_distribute,
 )
 
 
@@ -348,6 +352,14 @@ def _run_case(
         "seed": args.seed + case_id,
     }
 
+    use_auto_dispatch = args.metal_dispatch == "auto"
+    use_hybrid = use_auto_dispatch and args.hybrid_latency and n == 32 and B == 1
+    use_ref_fallback = use_auto_dispatch and (not args.hybrid_latency) and n == 32 and B == 1
+    use_fused_metal = not use_hybrid and not use_ref_fallback
+    fused_backward_effective = (
+        args.fused_backward and (not use_auto_dispatch or B >= 8) and use_fused_metal
+    )
+
     if not args.no_correctness:
         y_ref = ref(x)
         y_metal = metal(x)
@@ -506,7 +518,7 @@ def _run_case(
     if args.with_backward:
         inputs = [x, H_pre_raw, H_post_raw, H_res_raw, rms_weight]
         backward_compiled = args.compiled
-        if args.fused_backward and backward_compiled:
+        if fused_backward_effective and backward_compiled:
             if not getattr(args, "_warned_backward_compile", False):
                 print("Note: disabling mx.compile for backward when fused backward is enabled.")
                 args._warned_backward_compile = True
@@ -525,14 +537,29 @@ def _run_case(
             return mx.sum(out)
 
         def metal_loss(x, H_pre_raw, H_post_raw, H_res_raw, rms_weight):
-            use_ref_fallback = (
-                args.metal_dispatch == "auto"
-                and args.hybrid_latency
-                and n == 32
-                and B == 1
-            )
             if use_ref_fallback:
                 return ref_loss(x, H_pre_raw, H_post_raw, H_res_raw, rms_weight)
+
+            H_pre_act, H_post_act = activate_pre_post(H_pre_raw, H_post_raw)
+            if use_hybrid:
+                M = sinkhorn_knopp_metal_autograd(
+                    H_res_raw,
+                    iters=args.sinkhorn_iters,
+                    eps=args.eps,
+                    threads_per_group=tpg,
+                    verbose=False,
+                )
+                y_agg = stream_aggregate(x, H_pre_act)
+                y_norm = rms_norm(y_agg, rms_weight, eps=args.eps)
+                y_dist = stream_distribute(y_norm, H_post_act)
+                out = stream_mix_add_metal_autograd(
+                    x,
+                    M,
+                    y_dist,
+                    threads_per_group=tpg,
+                    verbose=False,
+                )
+                return mx.sum(out)
 
             M = sinkhorn_knopp_metal_autograd(
                 H_res_raw,
@@ -541,7 +568,6 @@ def _run_case(
                 threads_per_group=tpg,
                 verbose=False,
             )
-            H_pre_act, H_post_act = activate_pre_post(H_pre_raw, H_post_raw)
             out = mhc_forward_fused_metal_autograd(
                 x,
                 M,
@@ -550,7 +576,7 @@ def _run_case(
                 rms_weight,
                 eps=args.eps,
                 threads_per_group=tpg,
-                fused_backward=args.fused_backward,
+                fused_backward=fused_backward_effective,
                 verbose=False,
             )
             return mx.sum(out)
@@ -612,7 +638,7 @@ def main():
     parser.add_argument("--sinkhorn-iters", type=int, default=20)
     parser.add_argument("--eps", type=float, default=1e-5)
     parser.add_argument("--threads-per-group", type=int, default=None)
-    parser.add_argument("--metal-dispatch", type=str, choices=["auto", "force"], default="force")
+    parser.add_argument("--metal-dispatch", type=str, choices=["auto", "force"], default="auto")
     parser.add_argument("--hybrid-latency", dest="hybrid_latency", action="store_true")
     parser.add_argument("--no-hybrid-latency", dest="hybrid_latency", action="store_false")
     parser.set_defaults(hybrid_latency=True)
