@@ -340,14 +340,22 @@ def _run_case(
     mx.eval(rms_weight)
 
     use_auto_dispatch = args.metal_dispatch == "auto"
+    use_latency_policy = args.mode == "latency"
     use_hybrid = (
         use_auto_dispatch
+        and use_latency_policy
         and args.hybrid_latency
         and n == 32
         and B == 1
         and C >= args.hybrid_min_C
     )
-    use_ref_fallback = use_auto_dispatch and n == 32 and B == 1 and not use_hybrid
+    use_ref_fallback = (
+        use_auto_dispatch
+        and use_latency_policy
+        and n == 32
+        and B == 1
+        and not use_hybrid
+    )
     use_fused_metal = not use_hybrid and not use_ref_fallback
     fused_backward_effective = (
         args.fused_backward

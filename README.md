@@ -60,15 +60,15 @@ Auto-dispatch benchmark (speedup = reference / Metal, >1 is faster):
 - Sweep: B={1,8}, n={4,8,16,32}, C={512,1024,2048,4096}, dtype=float16,float32
 - Settings: iters=100, warmup=10, repeats=3, queue_guard=50, hybrid_latency=off, hybrid_min_C=8192, fused_backward=on, with_backward=on
 - Backward compiled: off (benchmark disables mx.compile for backward when fused_backward=on)
-- Latency corner (B=1, n=32): reference fallback by default; hybrid path only when `hybrid_latency` is on and `C >= hybrid_min_C`
+- Latency corner (B=1, n=32): reference fallback by default in latency mode; hybrid path only when `hybrid_latency` is on and `C >= hybrid_min_C`
 - Results are hardware-specific; rerun on your machine for final numbers.
 
 End-to-end MHCLayer (auto-dispatch, median speedup with p10-p90):
 
 | Mode       | Forward | Backward |
 |------------|---------|----------|
-| Throughput | 2.63x (0.98-7.07) | 2.91x (1.02-6.46) |
-| Latency    | 0.96x (0.55-1.89) | 1.12x (0.61-2.10) |
+| Throughput | 2.53x (1.01-7.25) | 2.99x (1.06-6.24) |
+| Latency    | 0.98x (0.54-1.78) | 1.12x (0.66-2.00) |
 
 ## Usage
 
@@ -102,7 +102,7 @@ out = x_mixed + y_dist
 
 ## Notes
 
-- Auto-dispatch uses fused Metal for most shapes; for the latency corner (n == 32, B == 1) it uses the compiled reference fallback by default or the hybrid path when `hybrid_latency` is enabled and `C >= hybrid_min_C`. Use `--metal-dispatch force` to always use fused Metal.
+- Auto-dispatch uses fused Metal for most shapes; for the latency corner (n == 32, B == 1) it uses the compiled reference fallback in latency mode or the hybrid path when `hybrid_latency` is enabled and `C >= hybrid_min_C`. Use `--metal-dispatch force` to always use fused Metal.
 - Backward uses Metal kernels (no reference VJPs). Use `--no-fused-backward` if you want backward compatible with `mx.compile`.
 - With auto-dispatch, backward prefers the non-fused kernels unless `B*n >= 64` or `C >= 4096`; use `--metal-dispatch force` to force fused backward.
 - MHCLayer defaults to identity-friendly initialization under exp-parameterization (off-diagonal logits ~ -12). Pass identity_init=False for zero-init logits.
