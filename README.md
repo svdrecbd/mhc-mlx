@@ -95,6 +95,8 @@ Auto-dispatch benchmark (speedup = reference / Metal, >1 is faster):
 - Chip: Apple M4 Pro, macOS 15.6.1, MLX 0.30.0, device gpu
 - Sweep: B={1,8,32}, n={4,8,16,32}, C={256,512,1024,2048,4096}, dtypes={bfloat16,float16,float32}
 - Settings: iters=200, warmup=10, repeats=3, queue_guard=50, hybrid_latency=on
+- Latency corner (B=1, n=32, C>=1024, bfloat16): 1.05-1.13x
+- Results are hardware-specific; rerun on your machine for final numbers.
 
 | Mode       | Sinkhorn speedup | Fused speedup | Layer speedup |
 |------------|------------------|---------------|---------------|
