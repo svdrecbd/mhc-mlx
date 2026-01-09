@@ -1,8 +1,17 @@
 import mlx.core as mx
 
 from mhc_mlx.layer import MHCLayer
-from mhc_mlx.metal import mhc_forward_fused_metal, sinkhorn_knopp_metal
-from mhc_mlx.reference import activate_pre_post, mhc_forward_reference, mixing_matrix_from_logits
+from mhc_mlx.metal import (
+    mhc_forward_fused_metal,
+    mhc_forward_fused_metal_autograd,
+    sinkhorn_knopp_metal,
+    sinkhorn_knopp_metal_autograd,
+)
+from mhc_mlx.reference import (
+    activate_pre_post,
+    mhc_forward_reference,
+    mixing_matrix_from_logits,
+)
 
 
 def max_abs(a: mx.array, b: mx.array) -> float:
@@ -246,7 +255,7 @@ def test_guardrail_shapes():
         assert rel_err < tol_rel
 
 
-def test_hybrid_latency_corner():
+def test_latency_fallback_corner():
     mx.random.seed(7)
 
     B, n, C = 1, 32, 1024
@@ -290,11 +299,68 @@ def test_hybrid_latency_corner():
 
     max_err = max_abs(y_ref, y_auto)
     rel_err = max_err / max(max_abs_val(y_ref), 1e-8)
-    print(f"hybrid latency corner max_abs={max_err:.6e} rel={rel_err:.6e}")
+    print(f"latency fallback corner max_abs={max_err:.6e} rel={rel_err:.6e}")
     assert max_err < 1e-4
     assert rel_err < 1e-4
 
 
+def test_backward_gradients():
+    mx.random.seed(9)
+
+    B, n, C = 1, 4, 16
+    x = mx.random.normal((B, n, C)).astype(mx.float32)
+
+    H_pre_raw = mx.random.normal((n,)).astype(mx.float32)
+    H_post_raw = mx.random.normal((n,)).astype(mx.float32)
+    H_res_raw = mx.random.normal((n, n)).astype(mx.float32)
+    rms_weight = mx.ones((C,), dtype=mx.float32)
+
+    def ref_loss(x, H_pre_raw, H_post_raw, H_res_raw, rms_weight):
+        out = mhc_forward_reference(
+            x_expanded=x,
+            H_pre_raw=H_pre_raw,
+            H_post_raw=H_post_raw,
+            H_res_raw=H_res_raw,
+            rms_weight=rms_weight,
+            sinkhorn_iters=5,
+            eps=1e-5,
+        )
+        return mx.sum(out)
+
+    def metal_loss(x, H_pre_raw, H_post_raw, H_res_raw, rms_weight):
+        M = sinkhorn_knopp_metal_autograd(H_res_raw, iters=5, eps=1e-5, threads_per_group=64)
+        H_pre_act, H_post_act = activate_pre_post(H_pre_raw, H_post_raw)
+        out = mhc_forward_fused_metal_autograd(
+            x,
+            M,
+            H_pre_act,
+            H_post_act,
+            rms_weight,
+            eps=1e-5,
+            threads_per_group=64,
+        )
+        return mx.sum(out)
+
+    argnums = [0, 1, 2, 3, 4]
+    ref_loss_val, ref_grads = mx.value_and_grad(ref_loss, argnums=argnums)(
+        x, H_pre_raw, H_post_raw, H_res_raw, rms_weight
+    )
+    metal_loss_val, metal_grads = mx.value_and_grad(metal_loss, argnums=argnums)(
+        x, H_pre_raw, H_post_raw, H_res_raw, rms_weight
+    )
+
+    mx.eval(ref_loss_val, metal_loss_val, *ref_grads, *metal_grads)
+    mx.synchronize()
+
+    loss_err = float(mx.abs(ref_loss_val - metal_loss_val).item())
+    print(f"backward loss diff: {loss_err:.6e}")
+    assert loss_err < 1e-4
+
+    tol = 1e-4
+    for idx, (g_ref, g_metal) in enumerate(zip(ref_grads, metal_grads), start=1):
+        err = max_abs(g_ref, g_metal)
+        print(f"backward grad {idx} max abs error: {err:.6e}")
+        assert err < tol
 
 
 def main():
@@ -331,8 +397,11 @@ def main():
     print("\n--- Testing guardrail shape sweep ---")
     test_guardrail_shapes()
 
-    print("\n--- Testing hybrid latency corner ---")
-    test_hybrid_latency_corner()
+    print("\n--- Testing latency fallback corner ---")
+    test_latency_fallback_corner()
+
+    print("\n--- Testing backward gradients ---")
+    test_backward_gradients()
 
     print("\nAll correctness tests passed.")
 

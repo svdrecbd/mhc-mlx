@@ -74,8 +74,11 @@ python benchmark.py --threads-per-group 128
 # More stable timings (median + p10/p90 with queue guard)
 python benchmark.py --repeats 5 --queue-guard 50
 
-# Measure default auto-dispatch behavior (includes hybrid latency path)
+# Measure default auto-dispatch behavior (includes latency fallback)
 python benchmark.py --metal-dispatch auto
+
+# Include backward benchmarks (gradients)
+python benchmark.py --with-backward --metal-dispatch auto
 
 # Optional: reduce sync overhead variance for latency mode
 MLX_METAL_FAST_SYNCH=1 python benchmark.py --mode latency
@@ -93,23 +96,24 @@ python scripts/plot_benchmark_speedup.py --summary summary_by_C.csv
 Auto-dispatch benchmark (speedup = reference / Metal, >1 is faster):
 
 - Chip: Apple M4 Pro, macOS 15.6.1, MLX 0.30.0, device gpu
-- Sweep: B={1,8,32}, n={4,8,16,32}, C={256,512,1024,2048,4096}, dtypes={bfloat16,float16,float32}
-- Settings: iters=200, warmup=10, repeats=3, queue_guard=50, hybrid_latency=on
-- Latency corner (B=1, n=32, C>=1024, bfloat16): 1.05-1.13x
+- Sweep: B={1,8}, n={4,8,16,32}, C={512,1024,2048}, dtype=bfloat16
+- Settings: iters=100, warmup=10, repeats=3, queue_guard=50, hybrid_latency=on, with_backward=on
+- Latency corner (B=1, n=32): reference fallback, ~0.96-1.00x (by construction)
 - Results are hardware-specific; rerun on your machine for final numbers.
 
-| Mode       | Sinkhorn speedup | Fused speedup | Layer speedup |
-|------------|------------------|---------------|---------------|
-| Throughput | 2.67 (0.88-6.53) | 2.35 (1.47-4.55) | 2.92 (0.99-7.16) |
-| Latency    | 0.76 (0.28-1.82) | 1.41 (0.84-2.66) | 1.06 (0.48-1.95) |
+| Mode       | Sinkhorn speedup | Fused speedup | Layer speedup | Layer backward speedup |
+|------------|------------------|---------------|---------------|------------------------|
+| Throughput | 2.52 (0.89-4.65) | 2.65 (1.15-3.35) | 2.71 (0.94-7.61) | 1.05 (0.98-1.10) |
+| Latency    | 0.96 (0.35-1.87) | 1.36 (0.77-1.53) | 1.00 (0.50-1.95) | 0.61 (0.46-0.93) |
 
 ## Notes
 
 - MHCLayer defaults to identity-friendly initialization under exp-parameterization (off-diagonal logits ~ -12). Pass identity_init=False for zero-init logits.
 - Metal kernels default to n <= 64 (see `_MAX_N_ALLOWED` in `mhc_mlx/metal.py`). Raise the limit and rerun tests if needed.
 - `benchmark.py` writes one JSON dict per line to results.jsonl with median/p10/p90 timings; include it in your reports.
-- Auto-dispatch uses Metal for n <= 16 and a hybrid path for n == 32, B == 1, C >= 1024 (latency-sensitive). The hybrid path computes aggregate/RMS/distribute in MLX and uses Metal for mix+add. Set `auto_dispatch=False` to force the fused Metal path.
-- The Metal path is intended for inference and benchmarking. For training, start with the reference path.
+- Auto-dispatch uses Metal for n <= 16 and falls back to the compiled reference path for n == 32, B == 1 (latency-sensitive). Set `hybrid_latency=False` to force the fused Metal path.
+- Backward uses custom VJPs: forward is Metal, gradients use MLX reference ops.
+- Training is supported via custom VJPs (Metal forward, reference backward). For new research, validate with the reference path first.
 - The first run includes Metal JIT compilation overhead.
 
 ## Files
@@ -119,7 +123,7 @@ Auto-dispatch benchmark (speedup = reference / Metal, >1 is faster):
 - `mhc_mlx/layer.py`: MHCLayer module (reference or Metal path)
 - `kernels/sinkhorn_knopp.metal`: Sinkhorn-Knopp projection kernel body
 - `kernels/mhc_fused.metal`: fused aggregate + RMSNorm + mix + add kernel body
-- `kernels/stream_mix_add.metal`: stream mix + add(y_dist) kernel body (used by hybrid latency path)
+- `kernels/stream_mix_add.metal`: stream mix + add(y_dist) kernel body (optional hybrid experiments)
 - `test_correctness.py`: reference vs Metal comparisons
 - `benchmark.py`: benchmark suite with correctness checks and JSONL output
 

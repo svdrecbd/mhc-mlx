@@ -51,7 +51,7 @@ out = x_mixed + y_dist
   - Includes an unrolled fast path for n=4
 
 - `kernels/stream_mix_add.metal`
-  - Metal kernel body that fuses stream mix + add(y_dist) for the hybrid latency path
+  - Metal kernel body that fuses stream mix + add(y_dist) for optional hybrid experiments
 
 - `mhc_mlx/metal.py`
   - Builds and calls custom Metal kernels using mlx.core.fast.metal_kernel
@@ -116,6 +116,7 @@ To measure something meaningful:
 - Override threads_per_group if you want a fixed launch size; otherwise a heuristic is used.
 - Use repeats + p10/p90 to avoid outliers, and queue-guard to avoid enqueue-only timing.
 - Use `--metal-dispatch auto` to benchmark the default auto-dispatch behavior.
+- Use `--with-backward` to time gradient computation.
 
 Run:
 
@@ -140,12 +141,10 @@ If you want to see the generated Metal source for debugging:
 
 ## Training vs Inference
 
-- For training, use the reference path first.
-  The Metal kernel in this repo is a forward-only path; if you need gradients through the kernel, you should either:
-  - keep using the reference path for training, or
-  - implement a custom_function VJP (see MLX docs on custom_function and Grid Sample VJP).
+- For training, use the reference path first to validate numerics.
+  The Metal path exposes gradients via custom VJPs (forward in Metal, backward in reference ops).
 
-- For inference, use_metal=True is fine and is the intended use. Auto-dispatch defaults to Metal for n <= 16 and uses a hybrid path for n == 32, B == 1, C >= 1024 (MLX aggregate/RMS/distribute + Metal mix/add). Set auto_dispatch=False to force the fused Metal path.
+- For inference, use_metal=True is fine and is the intended use. Auto-dispatch defaults to Metal for n <= 16 and falls back to the compiled reference path for n == 32, B == 1 (latency-sensitive). Set hybrid_latency=False to force the fused Metal path.
 
 ## Extending This Repo
 

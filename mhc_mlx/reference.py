@@ -143,6 +143,22 @@ def stream_mix_ref(x_expanded: mx.array, M: mx.array) -> mx.array:
     return mx.sum(M_f[None, :, :, None] * x[:, None, :, :], axis=2)
 
 
+def mhc_forward_fused_reference(
+    x_expanded: mx.array,
+    M: mx.array,
+    H_pre_act: mx.array,
+    H_post_act: mx.array,
+    rms_weight: mx.array,
+    eps: float = 1e-5,
+) -> mx.array:
+    """Reference fused forward pass using activated pre/post and a mixing matrix."""
+    y_agg = stream_aggregate(x_expanded, H_pre_act)
+    y_norm = rms_norm(y_agg, rms_weight, eps=eps)
+    y_dist = stream_distribute(y_norm, H_post_act)
+    x_mixed = stream_mix_ref(x_expanded, M)
+    return x_mixed + y_dist
+
+
 def mhc_forward_reference(
     x_expanded: mx.array,
     H_pre_raw: mx.array,

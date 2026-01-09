@@ -10,14 +10,18 @@ from importlib import metadata as importlib_metadata
 import mlx.core as mx
 
 from mhc_mlx.layer import MHCLayer
-from mhc_mlx.metal import mhc_forward_fused_metal, sinkhorn_knopp_metal, suggest_threads_per_group
+from mhc_mlx.metal import (
+    mhc_forward_fused_metal,
+    mhc_forward_fused_metal_autograd,
+    sinkhorn_knopp_metal,
+    sinkhorn_knopp_metal_autograd,
+    suggest_threads_per_group,
+)
 from mhc_mlx.reference import (
     activate_pre_post,
+    mhc_forward_fused_reference,
+    mhc_forward_reference,
     mixing_matrix_from_logits,
-    rms_norm,
-    stream_aggregate,
-    stream_distribute,
-    stream_mix_ref,
 )
 
 
@@ -88,12 +92,62 @@ def bench_repeat(
     return times
 
 
-def fused_reference(x, M, H_pre_act, H_post_act, rms_weight, eps):
-    y_agg = stream_aggregate(x, H_pre_act)
-    y_norm = rms_norm(y_agg, rms_weight, eps=eps)
-    y_dist = stream_distribute(y_norm, H_post_act)
-    x_mixed = stream_mix_ref(x, M)
-    return x_mixed + y_dist
+def _flatten_grads(grads) -> list[mx.array]:
+    if grads is None:
+        return []
+    if isinstance(grads, (list, tuple)):
+        return list(grads)
+    return [grads]
+
+
+def bench_backward_repeat(
+    loss_fn,
+    inputs: list[mx.array],
+    iters: int = 200,
+    warmup: int = 10,
+    repeats: int = 3,
+    compiled: bool = True,
+    mode: str = "throughput",
+    queue_guard: int = 0,
+) -> list[float]:
+    # Pre-eval inputs so they exist on device before timing
+    mx.eval(*inputs)
+    mx.synchronize()
+
+    argnums = list(range(len(inputs)))
+
+    def _loss(*args):
+        return loss_fn(*args)
+
+    grad_fn = mx.value_and_grad(_loss, argnums=argnums)
+
+    if compiled and callable(getattr(mx, "compile", None)):
+        grad_fn = mx.compile(grad_fn)
+
+    # Warmup
+    for _ in range(warmup):
+        loss, grads = grad_fn(*inputs)
+        mx.eval(loss, *_flatten_grads(grads))
+    mx.synchronize()
+
+    times = []
+    for _ in range(repeats):
+        t0 = time.perf_counter()
+        if mode == "latency":
+            for _ in range(iters):
+                loss, grads = grad_fn(*inputs)
+                mx.eval(loss, *_flatten_grads(grads))
+            mx.synchronize()
+        else:
+            for i in range(iters):
+                loss, grads = grad_fn(*inputs)
+                mx.async_eval(loss, *_flatten_grads(grads))
+                if queue_guard and (i + 1) % queue_guard == 0:
+                    mx.synchronize()
+            mx.synchronize()
+        t1 = time.perf_counter()
+        times.append((t1 - t0) / iters)
+    return times
 
 
 def _parse_int_list(value: str) -> list[int]:
@@ -199,6 +253,7 @@ def _base_record(args, device: str, chip: str, machine: str, macos: str, mlx_ver
         "sinkhorn_iters": args.sinkhorn_iters,
         "metal_dispatch": args.metal_dispatch,
         "hybrid_latency": args.hybrid_latency,
+        "with_backward": args.with_backward,
         "threads_per_group": args.threads_per_group,
     }
 
@@ -361,7 +416,7 @@ def _run_case(
 
     # Fused forward only (precomputed M and activations)
     fused_ref_times = bench_repeat(
-        lambda _x: fused_reference(_x, M, H_pre_act, H_post_act, rms_weight, args.eps),
+        lambda _x: mhc_forward_fused_reference(_x, M, H_pre_act, H_post_act, rms_weight, args.eps),
         x,
         iters=args.iters,
         warmup=args.warmup,
@@ -446,6 +501,89 @@ def _run_case(
         },
     )
 
+    if args.with_backward:
+        inputs = [x, H_pre_raw, H_post_raw, H_res_raw, rms_weight]
+
+        def ref_loss(x, H_pre_raw, H_post_raw, H_res_raw, rms_weight):
+            out = mhc_forward_reference(
+                x_expanded=x,
+                H_pre_raw=H_pre_raw,
+                H_post_raw=H_post_raw,
+                H_res_raw=H_res_raw,
+                rms_weight=rms_weight,
+                sinkhorn_iters=args.sinkhorn_iters,
+                eps=args.eps,
+            )
+            return mx.sum(out)
+
+        def metal_loss(x, H_pre_raw, H_post_raw, H_res_raw, rms_weight):
+            use_ref_fallback = (
+                args.metal_dispatch == "auto"
+                and args.hybrid_latency
+                and n == 32
+                and B == 1
+            )
+            if use_ref_fallback:
+                return ref_loss(x, H_pre_raw, H_post_raw, H_res_raw, rms_weight)
+
+            M = sinkhorn_knopp_metal_autograd(
+                H_res_raw,
+                iters=args.sinkhorn_iters,
+                eps=args.eps,
+                threads_per_group=tpg,
+                verbose=False,
+            )
+            H_pre_act, H_post_act = activate_pre_post(H_pre_raw, H_post_raw)
+            out = mhc_forward_fused_metal_autograd(
+                x,
+                M,
+                H_pre_act,
+                H_post_act,
+                rms_weight,
+                eps=args.eps,
+                threads_per_group=tpg,
+                verbose=False,
+            )
+            return mx.sum(out)
+
+        ref_back_times = bench_backward_repeat(
+            ref_loss,
+            inputs,
+            iters=args.iters,
+            warmup=args.warmup,
+            repeats=args.repeats,
+            compiled=args.compiled,
+            mode=args.mode,
+            queue_guard=args.queue_guard,
+        )
+        _write_jsonl(
+            out_path,
+            {
+                **common,
+                "benchmark": "layer_backward_ref",
+                **_summarize_times(ref_back_times),
+            },
+        )
+
+        metal_back_times = bench_backward_repeat(
+            metal_loss,
+            inputs,
+            iters=args.iters,
+            warmup=args.warmup,
+            repeats=args.repeats,
+            compiled=args.compiled,
+            mode=args.mode,
+            queue_guard=args.queue_guard,
+        )
+        _write_jsonl(
+            out_path,
+            {
+                **common,
+                "benchmark": "layer_backward_metal",
+                **_summarize_times(metal_back_times),
+            },
+        )
+
     print(
         f"[{args.mode}] case {case_id}: B={B} n={n} C={C} dtype={_dtype_name(dtype)} tpg={tpg}"
     )
@@ -474,6 +612,7 @@ def main():
     parser.add_argument("--no-compiled", dest="compiled", action="store_false")
     parser.set_defaults(compiled=True)
     parser.add_argument("--no-correctness", action="store_true")
+    parser.add_argument("--with-backward", action="store_true")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", type=str, default="results.jsonl")
     args = parser.parse_args()

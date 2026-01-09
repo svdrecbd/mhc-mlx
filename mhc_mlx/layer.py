@@ -11,8 +11,9 @@ The forward semantics match the reference implementation in this repo:
 - out = stream_mix(x_expanded, M) + y_dist
 
 The Metal fast path uses custom kernels for Sinkhorn and a fused RMSNorm/mix/add pass.
-Auto-dispatch defaults to Metal for n <= 16 and uses a latency-friendly hybrid path
-for n == 32, B == 1, C >= 1024.
+Backward uses custom VJPs that fall back to MLX reference ops for gradients.
+Auto-dispatch defaults to Metal for n <= 16 and uses a latency-friendly reference
+fallback for n == 32, B == 1.
 """
 
 from __future__ import annotations
@@ -21,9 +22,9 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from .metal import (
-    mhc_forward_fused_metal,
-    sinkhorn_knopp_metal,
-    stream_mix_add_metal,
+    mhc_forward_fused_metal_autograd,
+    sinkhorn_knopp_metal_autograd,
+    stream_mix_add_metal_autograd,
     suggest_threads_per_group,
 )
 from .reference import (
@@ -100,14 +101,17 @@ class MHCLayer(nn.Module):
             return False
         if not self.auto_dispatch:
             return True
-        if n <= 16:
-            return True
         return True
 
     def _should_use_hybrid(self, B: int, n: int, C: int) -> bool:
         if not self.use_metal or not self.auto_dispatch or not self.hybrid_latency:
             return False
-        return n == 32 and B == 1 and C >= 1024
+        return n == 32 and B == 1
+
+    def _should_use_reference_fallback(self, B: int, n: int, C: int) -> bool:
+        if not self.use_metal or not self.auto_dispatch or not self.hybrid_latency:
+            return False
+        return n == 32 and B == 1
 
     def _reference_forward(
         self,
@@ -136,11 +140,17 @@ class MHCLayer(nn.Module):
         rms_weight: mx.array,
     ) -> mx.array:
         H_pre_act, H_post_act = activate_pre_post(H_pre_raw, H_post_raw)
-        M = mixing_matrix_from_logits(H_res_raw, iters=self.sinkhorn_iters, eps=self.eps)
+        M = sinkhorn_knopp_metal_autograd(
+            H_res_raw,
+            iters=self.sinkhorn_iters,
+            eps=self.eps,
+            threads_per_group=self.threads_per_group,
+            verbose=False,
+        )
         y_agg = stream_aggregate(x_expanded, H_pre_act)
         y_norm = rms_norm(y_agg, rms_weight, eps=self.eps)
         y_dist = stream_distribute(y_norm, H_post_act)
-        return stream_mix_add_metal(
+        return stream_mix_add_metal_autograd(
             x_expanded,
             M,
             y_dist,
@@ -177,7 +187,16 @@ class MHCLayer(nn.Module):
         if C != self.C:
             raise ValueError(f"x_expanded C={C} does not match layer C={self.C}")
 
-        if self._should_use_hybrid(B, n, C):
+        if self._should_use_reference_fallback(B, n, C):
+            ref_fn = self._get_reference_runner()
+            out = ref_fn(
+                x_expanded,
+                self.H_pre_raw,
+                self.H_post_raw,
+                self.H_res_raw,
+                self.rms_weight,
+            )
+        elif self._should_use_hybrid(B, n, C):
             out = self._hybrid_forward(
                 x_expanded,
                 self.H_pre_raw,
@@ -187,7 +206,7 @@ class MHCLayer(nn.Module):
             )
         elif self._should_use_metal(B, n, C):
             # Use Metal kernels for Sinkhorn + fused RMSNorm/mix/add.
-            M = sinkhorn_knopp_metal(
+            M = sinkhorn_knopp_metal_autograd(
                 self.H_res_raw,
                 iters=self.sinkhorn_iters,
                 eps=self.eps,
@@ -195,7 +214,7 @@ class MHCLayer(nn.Module):
                 verbose=False,
             )
             H_pre_act, H_post_act = activate_pre_post(self.H_pre_raw, self.H_post_raw)
-            out = mhc_forward_fused_metal(
+            out = mhc_forward_fused_metal_autograd(
                 x=x_expanded,
                 M=M,
                 H_pre=H_pre_act,

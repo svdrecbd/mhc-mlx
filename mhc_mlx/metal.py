@@ -3,7 +3,7 @@
 This file contains the pieces that call mlx.core.fast.metal_kernel.
 The Metal kernels live in kernels/ and are kernel bodies, not full .metal libraries.
 
-Only forward is implemented here.
+Forward uses Metal kernels. Backward uses MLX reference ops via custom VJPs.
 """
 
 from __future__ import annotations
@@ -12,6 +12,8 @@ import os
 from functools import lru_cache
 
 import mlx.core as mx
+
+from .reference import mhc_forward_fused_reference, mixing_matrix_from_logits, stream_mix_ref
 
 _KERNEL_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "kernels")
 _STREAM_MIX_ADD_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add.metal")
@@ -45,6 +47,20 @@ def _maybe_print_source(source: str, name: str, verbose: bool) -> None:
     if verbose:
         print(f"--- {name} kernel source ---")
         print(source)
+
+
+def _as_list(value):
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
+
+
+def _match_structure(primals, grads):
+    if isinstance(primals, tuple):
+        return tuple(grads)
+    if isinstance(primals, list):
+        return grads
+    return grads[0] if grads else None
 
 
 @lru_cache(maxsize=8)
@@ -308,3 +324,131 @@ def mhc_forward_fused_metal(
     )[0]
 
     return out
+
+
+@lru_cache(maxsize=32)
+def _stream_mix_add_autograd_fn(threads_per_group: int):
+    @mx.custom_function
+    def _f(x, M, y_dist):
+        return stream_mix_add_metal(
+            x,
+            M,
+            y_dist,
+            threads_per_group=threads_per_group,
+            verbose=False,
+        )
+
+    @_f.vjp
+    def _f_vjp(primals, cotangents, _):
+        x, M, y_dist = primals
+        dout = _as_list(cotangents)[0]
+
+        def ref_fn(x, M, y_dist):
+            return stream_mix_ref(x, M) + y_dist
+
+        _, grads = mx.vjp(ref_fn, [x, M, y_dist], [dout])
+        return _match_structure(primals, grads)
+
+    return _f
+
+
+def stream_mix_add_metal_autograd(
+    x: mx.array,
+    M: mx.array,
+    y_dist: mx.array,
+    threads_per_group: int = 256,
+    verbose: bool = False,
+) -> mx.array:
+    """Stream mix + add with a custom VJP for gradients."""
+    if verbose:
+        _maybe_print_source(_stream_mix_add_source(_validate_n(M.shape[0])), "stream_mix_add", verbose=True)
+    return _stream_mix_add_autograd_fn(int(threads_per_group))(x, M, y_dist)
+
+
+@lru_cache(maxsize=32)
+def _sinkhorn_autograd_fn(iters: int, eps: float, threads_per_group: int):
+    @mx.custom_function
+    def _f(H_res_raw):
+        return sinkhorn_knopp_metal(
+            H_res_raw,
+            iters=iters,
+            eps=eps,
+            threads_per_group=threads_per_group,
+            verbose=False,
+        )
+
+    @_f.vjp
+    def _f_vjp(primals, cotangents, _):
+        if isinstance(primals, (list, tuple)):
+            H_res_raw = primals[0]
+        else:
+            H_res_raw = primals
+        dM = _as_list(cotangents)[0]
+
+        def ref_fn(h):
+            return mixing_matrix_from_logits(h, iters=iters, eps=eps)
+
+        _, grads = mx.vjp(ref_fn, [H_res_raw], [dM])
+        return _match_structure(primals, grads)
+
+    return _f
+
+
+def sinkhorn_knopp_metal_autograd(
+    H_res_raw: mx.array,
+    iters: int = 20,
+    eps: float = 1e-5,
+    threads_per_group: int = 64,
+    verbose: bool = False,
+) -> mx.array:
+    """Sinkhorn with a custom VJP for gradients."""
+    if verbose:
+        _maybe_print_source(_sinkhorn_source(_validate_n(H_res_raw.shape[0]), iters, eps), "sinkhorn_knopp", True)
+    return _sinkhorn_autograd_fn(int(iters), float(eps), int(threads_per_group))(H_res_raw)
+
+
+@lru_cache(maxsize=32)
+def _mhc_fused_autograd_fn(eps: float, threads_per_group: int):
+    @mx.custom_function
+    def _f(x, M, H_pre, H_post, rms_weight):
+        return mhc_forward_fused_metal(
+            x,
+            M,
+            H_pre,
+            H_post,
+            rms_weight,
+            eps=eps,
+            threads_per_group=threads_per_group,
+            verbose=False,
+        )
+
+    @_f.vjp
+    def _f_vjp(primals, cotangents, _):
+        x, M, H_pre, H_post, rms_weight = primals
+        dout = _as_list(cotangents)[0]
+
+        def ref_fn(x, M, H_pre, H_post, rms_weight):
+            return mhc_forward_fused_reference(x, M, H_pre, H_post, rms_weight, eps=eps)
+
+        _, grads = mx.vjp(ref_fn, [x, M, H_pre, H_post, rms_weight], [dout])
+        return _match_structure(primals, grads)
+
+    return _f
+
+
+def mhc_forward_fused_metal_autograd(
+    x: mx.array,
+    M: mx.array,
+    H_pre: mx.array,
+    H_post: mx.array,
+    rms_weight: mx.array,
+    eps: float = 1e-5,
+    threads_per_group: int = 256,
+    verbose: bool = False,
+) -> mx.array:
+    """Fused forward with a custom VJP for gradients."""
+    if verbose:
+        _maybe_print_source(_mhc_fused_source(_validate_n(M.shape[0]), eps), "mhc_fused", True)
+    return _mhc_fused_autograd_fn(float(eps), int(threads_per_group))(
+        x, M, H_pre, H_post, rms_weight
+    )
