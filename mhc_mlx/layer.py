@@ -12,8 +12,9 @@ The forward semantics match the reference implementation in this repo:
 
 The Metal fast path uses custom kernels for Sinkhorn and a fused RMSNorm/mix/add pass.
 Backward uses Metal kernels (no reference VJPs).
-Auto-dispatch defaults to Metal for n <= 16 and uses a reference fallback for the
-latency corner (n == 32, B == 1). The hybrid path is opt-in and gated on C.
+Auto-dispatch defaults to Metal and uses latency guardrails when
+dispatch_policy is "auto"/"latency" (e.g., avoid fused Metal for n == 32 with small C,
+or B == 1 with larger n). The hybrid path is opt-in and gated on C.
 """
 
 from __future__ import annotations
@@ -49,8 +50,11 @@ class MHCLayer(nn.Module):
         identity_init: bool = True,
         auto_dispatch: bool = True,
         compile_reference: bool | None = None,
+        dispatch_policy: str = "auto",
         hybrid_latency: bool = False,
         hybrid_min_C: int = 8192,
+        latency_avoid_fused_n32_max_C: int = 2048,
+        latency_avoid_fused_B1_min_n: int = 16,
         fused_backward: bool = True,
     ):
         super().__init__()
@@ -59,8 +63,14 @@ class MHCLayer(nn.Module):
             raise ValueError("n must be positive")
         if C <= 0:
             raise ValueError("C must be positive")
+        if dispatch_policy not in {"auto", "throughput", "latency"}:
+            raise ValueError("dispatch_policy must be one of: auto, throughput, latency")
         if hybrid_min_C <= 0:
             raise ValueError("hybrid_min_C must be positive")
+        if latency_avoid_fused_n32_max_C <= 0:
+            raise ValueError("latency_avoid_fused_n32_max_C must be positive")
+        if latency_avoid_fused_B1_min_n <= 0:
+            raise ValueError("latency_avoid_fused_B1_min_n must be positive")
 
         self.n = int(n)
         self.C = int(C)
@@ -68,8 +78,11 @@ class MHCLayer(nn.Module):
         self.eps = float(eps)
         self.use_metal = bool(use_metal)
         self.auto_dispatch = bool(auto_dispatch)
+        self.dispatch_policy = str(dispatch_policy)
         self.hybrid_latency = bool(hybrid_latency)
         self.hybrid_min_C = int(hybrid_min_C)
+        self.latency_avoid_fused_n32_max_C = int(latency_avoid_fused_n32_max_C)
+        self.latency_avoid_fused_B1_min_n = int(latency_avoid_fused_B1_min_n)
         self.fused_backward = bool(fused_backward)
         if threads_per_group is None:
             self.threads_per_group = suggest_threads_per_group(self.C)
@@ -109,17 +122,37 @@ class MHCLayer(nn.Module):
             return True
         return True
 
+    def _latency_policy_enabled(self) -> bool:
+        if self.dispatch_policy == "latency":
+            return True
+        if self.dispatch_policy == "throughput":
+            return False
+        return True
+
+    def _should_avoid_fused(self, B: int, n: int, C: int) -> bool:
+        if not self.use_metal or not self.auto_dispatch:
+            return False
+        if not self._latency_policy_enabled():
+            return False
+        if n == 32 and C <= self.latency_avoid_fused_n32_max_C:
+            return True
+        if B == 1 and n >= self.latency_avoid_fused_B1_min_n:
+            return True
+        return False
+
     def _should_use_hybrid(self, B: int, n: int, C: int) -> bool:
         if not self.use_metal or not self.auto_dispatch or not self.hybrid_latency:
+            return False
+        if not self._latency_policy_enabled():
             return False
         return n == 32 and B == 1 and C >= self.hybrid_min_C
 
     def _should_use_reference_fallback(self, B: int, n: int, C: int) -> bool:
         if not self.use_metal or not self.auto_dispatch:
             return False
-        if n == 32 and B == 1:
-            return not self._should_use_hybrid(B, n, C)
-        return False
+        if not self._should_avoid_fused(B, n, C):
+            return False
+        return not self._should_use_hybrid(B, n, C)
 
     def _should_use_fused_backward(self, B: int, n: int, C: int) -> bool:
         if not self.fused_backward:

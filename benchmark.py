@@ -256,7 +256,11 @@ def _base_record(args, device: str, chip: str, machine: str, macos: str, mlx_ver
         "chip": chip,
         "sinkhorn_iters": args.sinkhorn_iters,
         "metal_dispatch": args.metal_dispatch,
+        "dispatch_policy": args.dispatch_policy,
         "hybrid_latency": args.hybrid_latency,
+        "hybrid_min_C": args.hybrid_min_C,
+        "latency_avoid_fused_n32_max_C": args.latency_avoid_fused_n32_max_C,
+        "latency_avoid_fused_B1_min_n": args.latency_avoid_fused_B1_min_n,
         "fused_backward": args.fused_backward,
         "with_backward": args.with_backward,
         "threads_per_group": args.threads_per_group,
@@ -303,6 +307,10 @@ def _run_case(
     if tpg is None:
         tpg = suggest_threads_per_group(C)
 
+    dispatch_policy_effective = args.dispatch_policy
+    if dispatch_policy_effective == "auto":
+        dispatch_policy_effective = args.mode
+
     ref = MHCLayer(
         n=n,
         C=C,
@@ -317,8 +325,11 @@ def _run_case(
         threads_per_group=tpg,
         auto_dispatch=(args.metal_dispatch == "auto"),
         compile_reference=False,
+        dispatch_policy=dispatch_policy_effective,
         hybrid_latency=args.hybrid_latency,
         hybrid_min_C=args.hybrid_min_C,
+        latency_avoid_fused_n32_max_C=args.latency_avoid_fused_n32_max_C,
+        latency_avoid_fused_B1_min_n=args.latency_avoid_fused_B1_min_n,
         fused_backward=args.fused_backward,
     )
 
@@ -340,7 +351,14 @@ def _run_case(
     mx.eval(rms_weight)
 
     use_auto_dispatch = args.metal_dispatch == "auto"
-    use_latency_policy = args.mode == "latency"
+    use_latency_policy = dispatch_policy_effective == "latency"
+    avoid_reasons = []
+    if use_auto_dispatch and use_latency_policy:
+        if n == 32 and C <= args.latency_avoid_fused_n32_max_C:
+            avoid_reasons.append("fused_n32_smallC")
+        if B == 1 and n >= args.latency_avoid_fused_B1_min_n:
+            avoid_reasons.append("fused_B1_largeN")
+    avoid_fused = bool(avoid_reasons)
     use_hybrid = (
         use_auto_dispatch
         and use_latency_policy
@@ -349,13 +367,7 @@ def _run_case(
         and B == 1
         and C >= args.hybrid_min_C
     )
-    use_ref_fallback = (
-        use_auto_dispatch
-        and use_latency_policy
-        and n == 32
-        and B == 1
-        and not use_hybrid
-    )
+    use_ref_fallback = use_auto_dispatch and use_latency_policy and avoid_fused and not use_hybrid
     use_fused_metal = not use_hybrid and not use_ref_fallback
     fused_backward_effective = (
         args.fused_backward
@@ -367,6 +379,7 @@ def _run_case(
         dispatch_path = "reference"
     elif use_hybrid:
         dispatch_path = "hybrid"
+    avoid_reason = "+".join(avoid_reasons)
 
     common = {
         **base,
@@ -381,7 +394,12 @@ def _run_case(
         "threads_per_group": tpg,
         "seed": args.seed + case_id,
         "dispatch_path": dispatch_path,
+        "dispatch_policy_effective": dispatch_policy_effective,
         "hybrid_min_C": args.hybrid_min_C,
+        "latency_avoid_fused_n32_max_C": args.latency_avoid_fused_n32_max_C,
+        "latency_avoid_fused_B1_min_n": args.latency_avoid_fused_B1_min_n,
+        "avoid_fused": avoid_fused,
+        "avoid_reason": avoid_reason,
         "fused_backward_effective": fused_backward_effective,
     }
 
@@ -646,9 +664,11 @@ def _run_case(
             },
         )
 
+    avoid_label = avoid_reason or "none"
     print(
         f"[{args.mode}] case {case_id}: B={B} n={n} C={C} dtype={_dtype_name(dtype)} "
-        f"tpg={tpg} path={dispatch_path} fused_bw={fused_backward_effective}"
+        f"tpg={tpg} path={dispatch_path} fused_bw={fused_backward_effective} "
+        f"policy={dispatch_policy_effective} avoid={avoid_label}"
     )
 
 
@@ -665,10 +685,18 @@ def main():
     parser.add_argument("--eps", type=float, default=1e-5)
     parser.add_argument("--threads-per-group", type=int, default=None)
     parser.add_argument("--metal-dispatch", type=str, choices=["auto", "force"], default="auto")
+    parser.add_argument(
+        "--dispatch-policy",
+        type=str,
+        choices=["auto", "throughput", "latency"],
+        default="auto",
+    )
     parser.add_argument("--hybrid-latency", dest="hybrid_latency", action="store_true")
     parser.add_argument("--no-hybrid-latency", dest="hybrid_latency", action="store_false")
     parser.set_defaults(hybrid_latency=False)
     parser.add_argument("--hybrid-min-C", type=int, default=8192)
+    parser.add_argument("--latency-avoid-fused-n32-max-C", type=int, default=2048)
+    parser.add_argument("--latency-avoid-fused-B1-min-n", type=int, default=16)
     parser.add_argument("--queue-guard", type=int, default=50)
     parser.add_argument("--modes", type=str, default="throughput,latency")
     parser.add_argument("--mode", type=str, choices=["throughput", "latency"], default=None)

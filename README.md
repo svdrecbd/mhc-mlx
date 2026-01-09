@@ -42,7 +42,7 @@ python benchmark.py --with-backward --metal-dispatch auto
 python benchmark.py --with-backward --no-fused-backward
 
 # Enable hybrid for the latency corner (B=1, n=32) and gate by C
-python benchmark.py --with-backward --hybrid-latency --hybrid-min-C 4096
+python benchmark.py --mode latency --dispatch-policy latency --hybrid-latency --hybrid-min-C 4096
 
 # Optional: reduce sync overhead variance for latency mode
 MLX_METAL_FAST_SYNCH=1 python benchmark.py --mode latency
@@ -58,7 +58,7 @@ Auto-dispatch benchmark (speedup = reference / Metal, >1 is faster):
 
 - Chip: Apple M4 Pro, macOS 15.6.1, MLX 0.30.0, device gpu
 - Sweep: B={1,8}, n={4,8,16,32}, C={512,1024,2048,4096}, dtype=float16,float32
-- Settings: iters=100, warmup=10, repeats=3, queue_guard=50, hybrid_latency=off, hybrid_min_C=8192, fused_backward=on, with_backward=on
+- Settings: iters=100, warmup=10, repeats=3, queue_guard=50, dispatch_policy=auto, hybrid_latency=off, hybrid_min_C=8192, latency_avoid_fused_n32_max_C=2048, latency_avoid_fused_B1_min_n=16, fused_backward=on, with_backward=on
 - Backward compiled: off (benchmark disables mx.compile for backward when fused_backward=on)
 - Latency corner (B=1, n=32): reference fallback by default in latency mode; hybrid path only when `hybrid_latency` is on and `C >= hybrid_min_C`
 - Results are hardware-specific; rerun on your machine for final numbers.
@@ -102,7 +102,7 @@ out = x_mixed + y_dist
 
 ## Notes
 
-- Auto-dispatch uses fused Metal for most shapes; for the latency corner (n == 32, B == 1) it uses the compiled reference fallback in latency mode or the hybrid path when `hybrid_latency` is enabled and `C >= hybrid_min_C`. Use `--metal-dispatch force` to always use fused Metal.
+- Auto-dispatch uses fused Metal for most shapes; in latency mode it avoids fused Metal for n == 32 with `C <= latency_avoid_fused_n32_max_C` or B == 1 with `n >= latency_avoid_fused_B1_min_n`, routing to the compiled reference fallback (or hybrid when enabled and eligible). Use `--metal-dispatch force` to always use fused Metal.
 - Backward uses Metal kernels (no reference VJPs). Use `--no-fused-backward` if you want backward compatible with `mx.compile`.
 - With auto-dispatch, backward prefers the non-fused kernels unless `B*n >= 64` or `C >= 4096`; use `--metal-dispatch force` to force fused backward.
 - MHCLayer defaults to identity-friendly initialization under exp-parameterization (off-diagonal logits ~ -12). Pass identity_init=False for zero-init logits.
