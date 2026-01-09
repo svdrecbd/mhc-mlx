@@ -88,6 +88,19 @@ python scripts/summarize_benchmarks.py --in results.jsonl,results_latency.jsonl
 python scripts/plot_benchmark_speedup.py --summary summary_by_C.csv
 ```
 
+## Latest Results
+
+Auto-dispatch benchmark (speedup = reference / Metal, >1 is faster):
+
+- Chip: Apple M4 Pro, macOS 15.6.1, MLX 0.30.0, device gpu
+- Sweep: B={1,8,32}, n={4,8,16,32}, C={256,512,1024,2048,4096}, dtypes={bfloat16,float16,float32}
+- Settings: iters=200, warmup=10, repeats=3, queue_guard=50, hybrid_latency=on
+
+| Mode       | Sinkhorn speedup | Fused speedup | Layer speedup |
+|------------|------------------|---------------|---------------|
+| Throughput | 2.67 (0.88-6.53) | 2.35 (1.47-4.55) | 2.92 (0.99-7.16) |
+| Latency    | 0.76 (0.28-1.82) | 1.41 (0.84-2.66) | 1.06 (0.48-1.95) |
+
 ## Notes
 
 - MHCLayer defaults to identity-friendly initialization under exp-parameterization (off-diagonal logits ~ -12). Pass identity_init=False for zero-init logits.
@@ -104,6 +117,6 @@ python scripts/plot_benchmark_speedup.py --summary summary_by_C.csv
 - `mhc_mlx/layer.py`: MHCLayer module (reference or Metal path)
 - `kernels/sinkhorn_knopp.metal`: Sinkhorn-Knopp projection kernel body
 - `kernels/mhc_fused.metal`: fused aggregate + RMSNorm + mix + add kernel body
-- `kernels/stream_mix_add.metal`: legacy fused stream_mix + add(y_dist) kernel body
+- `kernels/stream_mix_add.metal`: stream mix + add(y_dist) kernel body (used by hybrid latency path)
 - `test_correctness.py`: reference vs Metal comparisons
 - `benchmark.py`: benchmark suite with correctness checks and JSONL output

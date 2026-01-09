@@ -51,7 +51,7 @@ out = x_mixed + y_dist
   - Includes an unrolled fast path for n=4
 
 - `kernels/stream_mix_add.metal`
-  - Legacy Metal kernel body that fuses stream mix + add(y_dist)
+  - Metal kernel body that fuses stream mix + add(y_dist) for the hybrid latency path
 
 - `mhc_mlx/metal.py`
   - Builds and calls custom Metal kernels using mlx.core.fast.metal_kernel
