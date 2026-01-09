@@ -125,7 +125,7 @@ To measure something meaningful:
 - Override threads_per_group if you want a fixed launch size; otherwise a heuristic is used.
 - Use repeats + p10/p90 to avoid outliers, and queue-guard to avoid enqueue-only timing.
 - Use `--metal-dispatch auto` to benchmark the default auto-dispatch behavior.
-- Use `--dispatch-policy latency` to enable latency guardrails; use `--dispatch-policy throughput` to force fused Metal.
+- Use `--dispatch-policy latency` to enable latency guardrails; use `--dispatch-policy throughput` to enable throughput guardrails.
 - Use `--with-backward` to time gradient computation.
 
 Run:
@@ -156,7 +156,7 @@ If you want to see the generated Metal source for debugging:
   If you need `mx.compile` on the backward pass, set fused_backward=False to use the non-fused kernels.
 
 - For inference, use_metal=True is fine and is the intended use. Auto-dispatch uses fused Metal for most shapes; in latency mode it avoids fused Metal for n == 32 with `C <= latency_avoid_fused_n32_max_C` or B == 1 with `n >= latency_avoid_fused_B1_min_n`, routing to the compiled reference fallback (or hybrid when enabled and eligible).
-- In throughput mode, fused Metal for n == 32 is only allowed when `B >= throughput_allow_fused_n32_min_B` and `C >= throughput_allow_fused_n32_min_C`.
+- In throughput mode, fused Metal for n == 32 is only allowed when `B >= throughput_allow_fused_n32_min_B` and (`C == throughput_allow_fused_n32_small_C` or `C >= throughput_allow_fused_n32_min_C`).
 - Use `auto_dispatch=False` to force fused Metal.
 - With auto-dispatch, backward prefers the non-fused kernels unless `B*n >= 64` or `C >= 4096`; set `auto_dispatch=False` to force fused backward.
 

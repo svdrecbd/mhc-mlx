@@ -61,17 +61,19 @@ Auto-dispatch benchmark (speedup = reference / Metal, >1 is faster):
 
 - Chip: Apple M4 Pro, macOS 15.6.1, MLX 0.30.0, device gpu
 - Sweep: B={1,8}, n={4,8,16,32}, C={512,1024,2048,4096}, dtype=float16,float32
-- Settings: iters=100, warmup=10, repeats=3, queue_guard=50, dispatch_policy=auto, hybrid_latency=off, hybrid_min_C=8192, latency_avoid_fused_n32_max_C=2048, latency_avoid_fused_B1_min_n=16, throughput_allow_fused_n32_min_B=8, throughput_allow_fused_n32_min_C=4096, fused_backward=on, with_backward=on
+- Settings: iters=100, warmup=10, repeats=3, queue_guard=50, dispatch_policy=auto, hybrid_latency=off, hybrid_min_C=8192, latency_avoid_fused_n32_max_C=2048, latency_avoid_fused_B1_min_n=16, throughput_allow_fused_n32_min_B=8, throughput_allow_fused_n32_min_C=4096, throughput_allow_fused_n32_small_C=512, fused_backward=on, with_backward=on
 - Backward compiled: off (benchmark disables mx.compile for backward when fused_backward=on)
 - Latency corner (B=1, n=32): reference fallback by default in latency mode; hybrid path only when `hybrid_latency` is on and `C >= hybrid_min_C`
+- Throughput (policy) uses `dispatch_policy=throughput` with the same guardrail defaults listed above.
 - Results are hardware-specific; rerun on your machine for final numbers.
 
 End-to-end MHCLayer (auto-dispatch, median speedup with p10-p90):
 
-| Mode       | Forward | Backward |
-|------------|---------|----------|
-| Throughput | 2.49x (1.01-7.10) | 2.81x (1.04-5.91) |
-| Latency    | 1.00x (0.68-1.83) | 1.14x (0.95-2.17) |
+| Mode                  | Forward | Backward |
+|-----------------------|---------|----------|
+| Throughput (auto)     | 2.50x (0.99-7.09) | 2.88x (0.99-6.06) |
+| Throughput (policy)   | 2.41x (1.00-7.02) | 2.87x (1.00-5.97) |
+| Latency (auto)        | 0.99x (0.67-1.90) | 1.19x (0.93-2.13) |
 
 ## Usage
 
@@ -106,7 +108,7 @@ out = x_mixed + y_dist
 ## Notes
 
 - Auto-dispatch uses fused Metal for most shapes; in latency mode it avoids fused Metal for n == 32 with `C <= latency_avoid_fused_n32_max_C` or B == 1 with `n >= latency_avoid_fused_B1_min_n`, routing to the compiled reference fallback (or hybrid when enabled and eligible).
-- In throughput mode, fused Metal for n == 32 is only allowed when `B >= throughput_allow_fused_n32_min_B` and `C >= throughput_allow_fused_n32_min_C`.
+- In throughput mode, fused Metal for n == 32 is only allowed when `B >= throughput_allow_fused_n32_min_B` and (`C == throughput_allow_fused_n32_small_C` or `C >= throughput_allow_fused_n32_min_C`).
 - Use `--metal-dispatch force` to always use fused Metal.
 - Backward uses Metal kernels (no reference VJPs). Use `--no-fused-backward` if you want backward compatible with `mx.compile`.
 - With auto-dispatch, backward prefers the non-fused kernels unless `B*n >= 64` or `C >= 4096`; use `--metal-dispatch force` to force fused backward.

@@ -58,6 +58,7 @@ class MHCLayer(nn.Module):
         latency_avoid_fused_B1_min_n: int = 16,
         throughput_allow_fused_n32_min_B: int = 8,
         throughput_allow_fused_n32_min_C: int = 4096,
+        throughput_allow_fused_n32_small_C: int = 512,
         fused_backward: bool = True,
     ):
         super().__init__()
@@ -78,6 +79,8 @@ class MHCLayer(nn.Module):
             raise ValueError("throughput_allow_fused_n32_min_B must be positive")
         if throughput_allow_fused_n32_min_C <= 0:
             raise ValueError("throughput_allow_fused_n32_min_C must be positive")
+        if throughput_allow_fused_n32_small_C < 0:
+            raise ValueError("throughput_allow_fused_n32_small_C must be >= 0")
 
         self.n = int(n)
         self.C = int(C)
@@ -92,6 +95,7 @@ class MHCLayer(nn.Module):
         self.latency_avoid_fused_B1_min_n = int(latency_avoid_fused_B1_min_n)
         self.throughput_allow_fused_n32_min_B = int(throughput_allow_fused_n32_min_B)
         self.throughput_allow_fused_n32_min_C = int(throughput_allow_fused_n32_min_C)
+        self.throughput_allow_fused_n32_small_C = int(throughput_allow_fused_n32_small_C)
         self.fused_backward = bool(fused_backward)
         if threads_per_group is None:
             self.threads_per_group = suggest_threads_per_group(self.C)
@@ -141,23 +145,38 @@ class MHCLayer(nn.Module):
     def _throughput_policy_enabled(self) -> bool:
         return self.dispatch_policy == "throughput"
 
+    def _should_avoid_fused_latency(self, B: int, n: int, C: int) -> bool:
+        if n == 32 and C <= self.latency_avoid_fused_n32_max_C:
+            return True
+        if B == 1 and n >= self.latency_avoid_fused_B1_min_n:
+            return True
+        return False
+
+    def _should_avoid_fused_throughput(self, B: int, n: int, C: int) -> bool:
+        if n != 32:
+            return False
+        if B < self.throughput_allow_fused_n32_min_B:
+            return True
+        allow_small = (
+            self.throughput_allow_fused_n32_small_C > 0
+            and C == self.throughput_allow_fused_n32_small_C
+        )
+        allow_large = C >= self.throughput_allow_fused_n32_min_C
+        if allow_small or allow_large:
+            return False
+        return True
+
     def _should_avoid_fused(self, B: int, n: int, C: int) -> bool:
         if not self.use_metal or not self.auto_dispatch:
             return False
-        if not self._latency_policy_enabled():
-            if not self._throughput_policy_enabled():
-                return False
-        if self._latency_policy_enabled():
-            if n == 32 and C <= self.latency_avoid_fused_n32_max_C:
-                return True
-            if B == 1 and n >= self.latency_avoid_fused_B1_min_n:
-                return True
-        if self._throughput_policy_enabled():
-            if n == 32:
-                if B < self.throughput_allow_fused_n32_min_B:
-                    return True
-                if C < self.throughput_allow_fused_n32_min_C:
-                    return True
+        latency_policy = self._latency_policy_enabled()
+        throughput_policy = self._throughput_policy_enabled()
+        if not (latency_policy or throughput_policy):
+            return False
+        if latency_policy and self._should_avoid_fused_latency(B, n, C):
+            return True
+        if throughput_policy and self._should_avoid_fused_throughput(B, n, C):
+            return True
         return False
 
     def _should_use_hybrid(self, B: int, n: int, C: int) -> bool:
