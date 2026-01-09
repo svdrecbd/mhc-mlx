@@ -20,6 +20,7 @@ _SINKHORN_BACKWARD_PATH = os.path.join(_KERNEL_DIR, "sinkhorn_knopp_backward.met
 _MHC_FUSED_PATH = os.path.join(_KERNEL_DIR, "mhc_fused.metal")
 _MHC_BACKWARD_PREP_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_prep.metal")
 _MHC_BACKWARD_DX_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dx.metal")
+_MHC_BACKWARD_FUSED_DX_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_fused_dx.metal")
 _MHC_BACKWARD_DM_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dM.metal")
 _MHC_BACKWARD_DH_PRE_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dH_pre.metal")
 _MHC_BACKWARD_DH_POST_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dH_post.metal")
@@ -200,6 +201,27 @@ def _mhc_backward_dx_source(max_n: int) -> str:
     return _render_source(
         _MHC_BACKWARD_DX_PATH,
         MAX_N=str(int(max_n)),
+    )
+
+
+@lru_cache(maxsize=16)
+def _mhc_backward_fused_dx_kernel(max_n: int, eps: float) -> object:
+    source = _mhc_backward_fused_dx_source(max_n, eps)
+    return mx.fast.metal_kernel(
+        name="mhc_backward_fused_dx",
+        input_names=["x", "M", "H_pre", "H_post", "rms_weight", "d_out"],
+        output_names=["dx", "y_agg", "d_y_norm", "inv_rms", "d_r"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _mhc_backward_fused_dx_source(max_n: int, eps: float) -> str:
+    return _render_source(
+        _MHC_BACKWARD_FUSED_DX_PATH,
+        MAX_N=str(int(max_n)),
+        MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
+        EPS=_format_float_literal(eps),
     )
 
 
@@ -647,6 +669,69 @@ def mhc_backward_dx_metal(
     return out
 
 
+def mhc_backward_fused_dx_metal(
+    x: mx.array,
+    M: mx.array,
+    H_pre: mx.array,
+    H_post: mx.array,
+    rms_weight: mx.array,
+    d_out: mx.array,
+    eps: float = 1e-5,
+    threads_per_group: int = 256,
+    verbose: bool = False,
+) -> tuple[mx.array, mx.array, mx.array, mx.array, mx.array]:
+    """Compute dx and RMS intermediates in one fused kernel."""
+    if x.ndim != 3:
+        raise ValueError(f"x must be [B, n, C], got shape {x.shape}")
+    if M.ndim != 2:
+        raise ValueError(f"M must be [n, n], got shape {M.shape}")
+    if d_out.shape != x.shape:
+        raise ValueError(f"d_out must match x shape, got {d_out.shape} vs {x.shape}")
+    if H_pre.ndim != 1:
+        raise ValueError(f"H_pre must be [n], got shape {H_pre.shape}")
+    if H_post.ndim != 1:
+        raise ValueError(f"H_post must be [n], got shape {H_post.shape}")
+    if rms_weight.ndim != 1:
+        raise ValueError(f"rms_weight must be [C], got shape {rms_weight.shape}")
+
+    B, n, C = x.shape
+    if M.shape != (n, n):
+        raise ValueError(f"M must be shape (n,n)=( {n},{n} ), got {M.shape}")
+    if H_pre.shape != (n,):
+        raise ValueError(f"H_pre must be shape (n,)=( {n}, ), got {H_pre.shape}")
+    if H_post.shape != (n,):
+        raise ValueError(f"H_post must be shape (n,)=( {n}, ), got {H_post.shape}")
+    if rms_weight.shape != (C,):
+        raise ValueError(f"rms_weight must be shape (C,)=( {C}, ), got {rms_weight.shape}")
+
+    max_n = _validate_n(n)
+    if threads_per_group <= 0:
+        raise ValueError("threads_per_group must be positive")
+    if threads_per_group > _MAX_TPG_ALLOWED:
+        raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED}")
+
+    if verbose:
+        _maybe_print_source(_mhc_backward_fused_dx_source(max_n, eps), "mhc_backward_fused_dx", True)
+
+    x_f = x.astype(mx.float32)
+    M_f = M.astype(mx.float32)
+    H_pre_f = H_pre.astype(mx.float32)
+    H_post_f = H_post.astype(mx.float32)
+    rms_weight_f = rms_weight.astype(mx.float32)
+    d_out_f = d_out.astype(mx.float32)
+
+    kernel = _mhc_backward_fused_dx_kernel(max_n, float(eps))
+    dx, y_agg, d_y_norm, inv_rms, d_r = kernel(
+        inputs=[x_f, M_f, H_pre_f, H_post_f, rms_weight_f, d_out_f],
+        grid=(threads_per_group, B, 1),
+        threadgroup=(threads_per_group, 1, 1),
+        output_shapes=[x_f.shape, (B, C), (B, C), (B,), (B,)],
+        output_dtypes=[mx.float32, mx.float32, mx.float32, mx.float32, mx.float32],
+    )
+
+    return dx, y_agg, d_y_norm, inv_rms, d_r
+
+
 def mhc_backward_dM_metal(
     x: mx.array,
     d_out: mx.array,
@@ -954,8 +1039,8 @@ def sinkhorn_knopp_metal_autograd(
     return _sinkhorn_autograd_fn(int(iters), float(eps), int(threads_per_group))(H_res_raw)
 
 
-@lru_cache(maxsize=32)
-def _mhc_fused_autograd_fn(eps: float, threads_per_group: int):
+@lru_cache(maxsize=64)
+def _mhc_fused_autograd_fn(eps: float, threads_per_group: int, fused_backward: bool):
     @mx.custom_function
     def _f(x, M, H_pre, H_post, rms_weight):
         return mhc_forward_fused_metal(
@@ -973,29 +1058,42 @@ def _mhc_fused_autograd_fn(eps: float, threads_per_group: int):
     def _f_vjp(primals, cotangents, _):
         x, M, H_pre, H_post, rms_weight = primals
         dout = _as_list(cotangents)[0]
-        y_agg, d_y_norm, inv_rms, d_r = mhc_backward_prep_metal(
-            x,
-            H_pre,
-            H_post,
-            rms_weight,
-            dout,
-            eps=eps,
-            threads_per_group=threads_per_group,
-            verbose=False,
-        )
-        dx = mhc_backward_dx_metal(
-            x,
-            M,
-            H_pre,
-            rms_weight,
-            dout,
-            y_agg,
-            d_y_norm,
-            inv_rms,
-            d_r,
-            threads_per_group=threads_per_group,
-            verbose=False,
-        )
+        if fused_backward:
+            dx, y_agg, d_y_norm, inv_rms, d_r = mhc_backward_fused_dx_metal(
+                x,
+                M,
+                H_pre,
+                H_post,
+                rms_weight,
+                dout,
+                eps=eps,
+                threads_per_group=threads_per_group,
+                verbose=False,
+            )
+        else:
+            y_agg, d_y_norm, inv_rms, d_r = mhc_backward_prep_metal(
+                x,
+                H_pre,
+                H_post,
+                rms_weight,
+                dout,
+                eps=eps,
+                threads_per_group=threads_per_group,
+                verbose=False,
+            )
+            dx = mhc_backward_dx_metal(
+                x,
+                M,
+                H_pre,
+                rms_weight,
+                dout,
+                y_agg,
+                d_y_norm,
+                inv_rms,
+                d_r,
+                threads_per_group=threads_per_group,
+                verbose=False,
+            )
         dM = mhc_backward_dM_metal(
             x,
             dout,
@@ -1040,11 +1138,12 @@ def mhc_forward_fused_metal_autograd(
     rms_weight: mx.array,
     eps: float = 1e-5,
     threads_per_group: int = 256,
+    fused_backward: bool = True,
     verbose: bool = False,
 ) -> mx.array:
     """Fused forward with Metal backward kernels."""
     if verbose:
         _maybe_print_source(_mhc_fused_source(_validate_n(M.shape[0]), eps), "mhc_fused", True)
-    return _mhc_fused_autograd_fn(float(eps), int(threads_per_group))(
+    return _mhc_fused_autograd_fn(float(eps), int(threads_per_group), bool(fused_backward))(
         x, M, H_pre, H_post, rms_weight
     )

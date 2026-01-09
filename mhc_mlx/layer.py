@@ -50,6 +50,7 @@ class MHCLayer(nn.Module):
         auto_dispatch: bool = True,
         compile_reference: bool | None = None,
         hybrid_latency: bool = True,
+        fused_backward: bool = True,
     ):
         super().__init__()
 
@@ -65,6 +66,7 @@ class MHCLayer(nn.Module):
         self.use_metal = bool(use_metal)
         self.auto_dispatch = bool(auto_dispatch)
         self.hybrid_latency = bool(hybrid_latency)
+        self.fused_backward = bool(fused_backward)
         if threads_per_group is None:
             self.threads_per_group = suggest_threads_per_group(self.C)
         else:
@@ -222,6 +224,7 @@ class MHCLayer(nn.Module):
                 rms_weight=self.rms_weight,
                 eps=self.eps,
                 threads_per_group=self.threads_per_group,
+                fused_backward=self.fused_backward,
                 verbose=False,
             )
         else:

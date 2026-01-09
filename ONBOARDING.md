@@ -57,7 +57,7 @@ out = x_mixed + y_dist
   - Metal kernel body that fuses stream mix + add(y_dist) for optional hybrid experiments
 
 - `kernels/mhc_backward_*.metal`
-  - Metal kernel bodies for fused backward (prep, dx, dM, dH_pre, dH_post, d_rms_weight)
+  - Metal kernel bodies for backward (prep, dx, fused_dx, dM, dH_pre, dH_post, d_rms_weight)
 
 - `kernels/stream_mix_backward_dx.metal`
   - Metal kernel body for stream-mix backward (dx)
@@ -152,6 +152,7 @@ If you want to see the generated Metal source for debugging:
 
 - For training, use the reference path first to validate numerics.
   The Metal path exposes gradients via Metal backward kernels (no reference VJPs).
+  If you need `mx.compile` on the backward pass, set fused_backward=False to use the non-fused kernels.
 
 - For inference, use_metal=True is fine and is the intended use. Auto-dispatch defaults to Metal for n <= 16 and falls back to the compiled reference path for n == 32, B == 1 (latency-sensitive). Set hybrid_latency=False to force the fused Metal path.
 

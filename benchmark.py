@@ -253,6 +253,7 @@ def _base_record(args, device: str, chip: str, machine: str, macos: str, mlx_ver
         "sinkhorn_iters": args.sinkhorn_iters,
         "metal_dispatch": args.metal_dispatch,
         "hybrid_latency": args.hybrid_latency,
+        "fused_backward": args.fused_backward,
         "with_backward": args.with_backward,
         "threads_per_group": args.threads_per_group,
     }
@@ -313,6 +314,7 @@ def _run_case(
         auto_dispatch=(args.metal_dispatch == "auto"),
         compile_reference=False,
         hybrid_latency=args.hybrid_latency,
+        fused_backward=args.fused_backward,
     )
 
     ref.H_pre_raw = H_pre_raw
@@ -503,6 +505,12 @@ def _run_case(
 
     if args.with_backward:
         inputs = [x, H_pre_raw, H_post_raw, H_res_raw, rms_weight]
+        backward_compiled = args.compiled
+        if args.fused_backward and backward_compiled:
+            if not getattr(args, "_warned_backward_compile", False):
+                print("Note: disabling mx.compile for backward when fused backward is enabled.")
+                args._warned_backward_compile = True
+            backward_compiled = False
 
         def ref_loss(x, H_pre_raw, H_post_raw, H_res_raw, rms_weight):
             out = mhc_forward_reference(
@@ -542,6 +550,7 @@ def _run_case(
                 rms_weight,
                 eps=args.eps,
                 threads_per_group=tpg,
+                fused_backward=args.fused_backward,
                 verbose=False,
             )
             return mx.sum(out)
@@ -552,7 +561,7 @@ def _run_case(
             iters=args.iters,
             warmup=args.warmup,
             repeats=args.repeats,
-            compiled=args.compiled,
+            compiled=backward_compiled,
             mode=args.mode,
             queue_guard=args.queue_guard,
         )
@@ -561,6 +570,7 @@ def _run_case(
             {
                 **common,
                 "benchmark": "layer_backward_ref",
+                "backward_compiled": backward_compiled,
                 **_summarize_times(ref_back_times),
             },
         )
@@ -571,7 +581,7 @@ def _run_case(
             iters=args.iters,
             warmup=args.warmup,
             repeats=args.repeats,
-            compiled=args.compiled,
+            compiled=backward_compiled,
             mode=args.mode,
             queue_guard=args.queue_guard,
         )
@@ -580,6 +590,7 @@ def _run_case(
             {
                 **common,
                 "benchmark": "layer_backward_metal",
+                "backward_compiled": backward_compiled,
                 **_summarize_times(metal_back_times),
             },
         )
@@ -613,6 +624,9 @@ def main():
     parser.set_defaults(compiled=True)
     parser.add_argument("--no-correctness", action="store_true")
     parser.add_argument("--with-backward", action="store_true")
+    parser.add_argument("--fused-backward", dest="fused_backward", action="store_true")
+    parser.add_argument("--no-fused-backward", dest="fused_backward", action="store_false")
+    parser.set_defaults(fused_backward=True)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", type=str, default="results.jsonl")
     args = parser.parse_args()
