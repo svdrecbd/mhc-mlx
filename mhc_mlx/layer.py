@@ -11,7 +11,7 @@ The forward semantics match the reference implementation in this repo:
 - out = stream_mix(x_expanded, M) + y_dist
 
 The Metal fast path uses custom kernels for Sinkhorn and a fused RMSNorm/mix/add pass.
-Backward uses custom VJPs that fall back to MLX reference ops for gradients.
+Backward uses Metal kernels (no reference VJPs).
 Auto-dispatch defaults to Metal for n <= 16 and uses a latency-friendly reference
 fallback for n == 32, B == 1.
 """

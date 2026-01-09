@@ -98,13 +98,13 @@ Auto-dispatch benchmark (speedup = reference / Metal, >1 is faster):
 - Chip: Apple M4 Pro, macOS 15.6.1, MLX 0.30.0, device gpu
 - Sweep: B={1,8}, n={4,8,16,32}, C={512,1024,2048}, dtype=bfloat16
 - Settings: iters=100, warmup=10, repeats=3, queue_guard=50, hybrid_latency=on, with_backward=on
-- Latency corner (B=1, n=32): reference fallback, ~0.96-1.00x (by construction)
+- Latency corner (B=1, n=32): reference fallback, ~0.92-1.03x (by construction)
 - Results are hardware-specific; rerun on your machine for final numbers.
 
 | Mode       | Sinkhorn speedup | Fused speedup | Layer speedup | Layer backward speedup |
 |------------|------------------|---------------|---------------|------------------------|
-| Throughput | 2.52 (0.89-4.65) | 2.65 (1.15-3.35) | 2.71 (0.94-7.61) | 1.05 (0.98-1.10) |
-| Latency    | 0.96 (0.35-1.87) | 1.36 (0.77-1.53) | 1.00 (0.50-1.95) | 0.61 (0.46-0.93) |
+| Throughput | 2.62 (0.88-6.74) | 2.80 (1.12-3.35) | 2.62 (0.90-7.06) | 1.99 (0.90-5.37) |
+| Latency    | 0.69 (0.28-1.53) | 1.39 (0.80-1.57) | 0.94 (0.50-1.70) | 1.01 (0.51-1.76) |
 
 ## Notes
 
@@ -112,8 +112,8 @@ Auto-dispatch benchmark (speedup = reference / Metal, >1 is faster):
 - Metal kernels default to n <= 64 (see `_MAX_N_ALLOWED` in `mhc_mlx/metal.py`). Raise the limit and rerun tests if needed.
 - `benchmark.py` writes one JSON dict per line to results.jsonl with median/p10/p90 timings; include it in your reports.
 - Auto-dispatch uses Metal for n <= 16 and falls back to the compiled reference path for n == 32, B == 1 (latency-sensitive). Set `hybrid_latency=False` to force the fused Metal path.
-- Backward uses custom VJPs: forward is Metal, gradients use MLX reference ops.
-- Training is supported via custom VJPs (Metal forward, reference backward). For new research, validate with the reference path first.
+- Backward uses Metal kernels (no reference VJPs).
+- Training is supported with Metal forward/backward; validate with the reference path first for new research.
 - The first run includes Metal JIT compilation overhead.
 
 ## Files
@@ -122,8 +122,11 @@ Auto-dispatch benchmark (speedup = reference / Metal, >1 is faster):
 - `mhc_mlx/metal.py`: kernel builder and Metal Sinkhorn + fused forward wrappers
 - `mhc_mlx/layer.py`: MHCLayer module (reference or Metal path)
 - `kernels/sinkhorn_knopp.metal`: Sinkhorn-Knopp projection kernel body
+- `kernels/sinkhorn_knopp_backward.metal`: Sinkhorn-Knopp backward kernel body
 - `kernels/mhc_fused.metal`: fused aggregate + RMSNorm + mix + add kernel body
 - `kernels/stream_mix_add.metal`: stream mix + add(y_dist) kernel body (optional hybrid experiments)
+- `kernels/mhc_backward_*.metal`: fused backward kernel bodies (prep, dx, dM, dH_pre, dH_post, d_rms_weight)
+- `kernels/stream_mix_backward_dx.metal`: stream-mix backward (dx) kernel body
 - `test_correctness.py`: reference vs Metal comparisons
 - `benchmark.py`: benchmark suite with correctness checks and JSONL output
 
