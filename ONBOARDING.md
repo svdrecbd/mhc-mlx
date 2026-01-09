@@ -57,7 +57,7 @@ out = x_mixed + y_dist
   - Metal kernel body that fuses stream mix + add(y_dist) for optional hybrid experiments
 
 - `kernels/mhc_backward_*.metal`
-  - Metal kernel bodies for backward (prep, dx, fused_dx, dM, dH_pre, dH_post, d_rms_weight)
+  - Metal kernel bodies for backward (prep, dx, fused_dx, dM, dH_pre, dH_post, dH_pre_post, d_rms_weight)
 
 - `kernels/stream_mix_backward_dx.metal`
   - Metal kernel body for stream-mix backward (dx)

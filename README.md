@@ -54,18 +54,18 @@ python scripts/plot_benchmark_speedup.py --summary summary_by_C.csv
 Auto-dispatch benchmark (speedup = reference / Metal, >1 is faster):
 
 - Chip: Apple M4 Pro, macOS 15.6.1, MLX 0.30.0, device gpu
-- Sweep: B={1,8}, n={4,8,16,32}, C={512,1024,2048}, dtype=bfloat16
+- Sweep: B={1,8}, n={4,8,16,32}, C={512,1024,2048,4096}, dtype=float16,float32
 - Settings: iters=100, warmup=10, repeats=3, queue_guard=50, hybrid_latency=on, fused_backward=on, with_backward=on
 - Backward compiled: off (benchmark disables mx.compile for backward when fused_backward=on)
-- Latency corner (B=1, n=32): reference fallback, ~0.98-1.11x (by construction)
+- Latency corner (B=1, n=32, C>=1024): reference fallback (by construction)
 - Results are hardware-specific; rerun on your machine for final numbers.
 
 End-to-end MHCLayer (auto-dispatch, median speedup with p10-p90):
 
 | Mode       | Forward | Backward |
 |------------|---------|----------|
-| Throughput | 2.63x (0.95-7.28) | 4.27x (1.09-10.74) |
-| Latency    | 0.96x (0.52-1.82) | 1.49x (0.76-3.26) |
+| Throughput | 2.44x (0.94-7.08) | 3.95x (1.05-11.29) |
+| Latency    | 0.94x (0.53-1.86) | 1.45x (0.74-3.55) |
 
 ## Usage
 

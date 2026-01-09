@@ -9,6 +9,7 @@
 // - dM:    [n, n]    float32
 
 constexpr int MAX_TPG = {{MAX_TPG}};
+constexpr int MAX_SIMDGROUPS = (MAX_TPG + 31) / 32;
 
 uint lane = thread_position_in_threadgroup.x;
 uint tpg = threads_per_threadgroup.x;
@@ -26,34 +27,44 @@ if ((int)idx >= nn) {
 int i = (int)(idx / (uint)n);
 int j = (int)(idx - (uint)(i * n));
 
-threadgroup float reduce_buf[MAX_TPG];
+threadgroup float simd_buf[MAX_SIMDGROUPS];
 
 float partial = 0.0f;
+uint C4 = (uint(C) / 4u) * 4u;
+
 for (int b = 0; b < B; ++b) {
     uint base = uint(b) * uint(n) * uint(C);
-    for (uint c = lane; c < uint(C); c += tpg) {
-        float doutv = float(d_out[base + uint(i) * uint(C) + c]);
-        float xv = float(x[base + uint(j) * uint(C) + c]);
+    uint base_i = base + uint(i) * uint(C);
+    uint base_j = base + uint(j) * uint(C);
+
+    for (uint c = lane * 4u; c < C4; c += tpg * 4u) {
+        const device packed_float4* dout_ptr =
+            (const device packed_float4*)(d_out + base_i + c);
+        const device packed_float4* x_ptr =
+            (const device packed_float4*)(x + base_j + c);
+        float4 doutv = float4(*dout_ptr);
+        float4 xv = float4(*x_ptr);
+        partial += dot(doutv, xv);
+    }
+
+    for (uint c = C4 + lane; c < uint(C); c += tpg) {
+        float doutv = float(d_out[base_i + c]);
+        float xv = float(x[base_j + c]);
         partial += doutv * xv;
     }
 }
 
-reduce_buf[lane] = partial;
+float simd_sum = metal::simd_sum(partial);
+if (thread_index_in_simdgroup == 0u) {
+    simd_buf[simdgroup_index_in_threadgroup] = simd_sum;
+}
 threadgroup_barrier(mem_flags::mem_threadgroup);
 
-uint active = tpg;
-while (active > 1) {
-    uint stride = active / 2;
-    if (lane < stride) {
-        reduce_buf[lane] += reduce_buf[lane + stride];
-    }
-    if ((active & 1u) != 0u && lane == 0u) {
-        reduce_buf[0] += reduce_buf[active - 1u];
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    active = stride + (active & 1u);
-}
-
 if (lane == 0u) {
-    dM[idx] = reduce_buf[0];
+    float total = 0.0f;
+    uint simd_groups = (tpg + 31u) / 32u;
+    for (uint g = 0; g < simd_groups; ++g) {
+        total += simd_buf[g];
+    }
+    dM[idx] = total;
 }

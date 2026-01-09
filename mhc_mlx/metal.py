@@ -24,6 +24,7 @@ _MHC_BACKWARD_FUSED_DX_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_fused_dx.m
 _MHC_BACKWARD_DM_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dM.metal")
 _MHC_BACKWARD_DH_PRE_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dH_pre.metal")
 _MHC_BACKWARD_DH_POST_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dH_post.metal")
+_MHC_BACKWARD_DH_PRE_POST_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dH_pre_post.metal")
 _MHC_BACKWARD_DRMS_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_d_rms_weight.metal")
 _STREAM_MIX_BACKWARD_DX_PATH = os.path.join(_KERNEL_DIR, "stream_mix_backward_dx.metal")
 
@@ -278,6 +279,25 @@ def _mhc_backward_dH_post_kernel() -> object:
 def _mhc_backward_dH_post_source() -> str:
     return _render_source(
         _MHC_BACKWARD_DH_POST_PATH,
+        MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
+    )
+
+
+@lru_cache(maxsize=16)
+def _mhc_backward_dH_pre_post_kernel() -> object:
+    source = _mhc_backward_dH_pre_post_source()
+    return mx.fast.metal_kernel(
+        name="mhc_backward_dH_pre_post",
+        input_names=["x", "d_out", "y_agg", "d_y_norm", "inv_rms", "d_r", "rms_weight"],
+        output_names=["dH_pre", "dH_post"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _mhc_backward_dH_pre_post_source() -> str:
+    return _render_source(
+        _MHC_BACKWARD_DH_PRE_POST_PATH,
         MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
     )
 
@@ -869,6 +889,64 @@ def mhc_backward_dH_post_metal(
     return out
 
 
+def mhc_backward_dH_pre_post_metal(
+    x: mx.array,
+    d_out: mx.array,
+    y_agg: mx.array,
+    d_y_norm: mx.array,
+    inv_rms: mx.array,
+    d_r: mx.array,
+    rms_weight: mx.array,
+    threads_per_group: int = 256,
+    verbose: bool = False,
+) -> tuple[mx.array, mx.array]:
+    """Compute dH_pre and dH_post in one pass."""
+    if x.ndim != 3:
+        raise ValueError(f"x must be [B, n, C], got shape {x.shape}")
+    if d_out.shape != x.shape:
+        raise ValueError(f"d_out must match x shape, got {d_out.shape} vs {x.shape}")
+
+    B, n, C = x.shape
+    if y_agg.shape != (B, C):
+        raise ValueError(f"y_agg must be [B, C], got {y_agg.shape}")
+    if d_y_norm.shape != (B, C):
+        raise ValueError(f"d_y_norm must be [B, C], got {d_y_norm.shape}")
+    if inv_rms.shape != (B,):
+        raise ValueError(f"inv_rms must be [B], got {inv_rms.shape}")
+    if d_r.shape != (B,):
+        raise ValueError(f"d_r must be [B], got {d_r.shape}")
+    if rms_weight.shape != (C,):
+        raise ValueError(f"rms_weight must be [C], got {rms_weight.shape}")
+
+    _validate_n(n)
+    if threads_per_group <= 0:
+        raise ValueError("threads_per_group must be positive")
+    if threads_per_group > _MAX_TPG_ALLOWED:
+        raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED}")
+
+    if verbose:
+        _maybe_print_source(_mhc_backward_dH_pre_post_source(), "mhc_backward_dH_pre_post", True)
+
+    kernel = _mhc_backward_dH_pre_post_kernel()
+    dH_pre, dH_post = kernel(
+        inputs=[
+            x.astype(mx.float32),
+            d_out.astype(mx.float32),
+            y_agg.astype(mx.float32),
+            d_y_norm.astype(mx.float32),
+            inv_rms.astype(mx.float32),
+            d_r.astype(mx.float32),
+            rms_weight.astype(mx.float32),
+        ],
+        grid=(threads_per_group, n, 1),
+        threadgroup=(threads_per_group, 1, 1),
+        output_shapes=[(n,), (n,)],
+        output_dtypes=[mx.float32, mx.float32],
+    )
+
+    return dH_pre, dH_post
+
+
 def mhc_backward_drms_weight_metal(
     y_agg: mx.array,
     d_y_norm: mx.array,
@@ -1100,20 +1178,13 @@ def _mhc_fused_autograd_fn(eps: float, threads_per_group: int, fused_backward: b
             threads_per_group=threads_per_group,
             verbose=False,
         )
-        dH_pre = mhc_backward_dH_pre_metal(
+        dH_pre, dH_post = mhc_backward_dH_pre_post_metal(
             x,
+            dout,
             y_agg,
             d_y_norm,
             inv_rms,
             d_r,
-            rms_weight,
-            threads_per_group=threads_per_group,
-            verbose=False,
-        )
-        dH_post = mhc_backward_dH_post_metal(
-            dout,
-            y_agg,
-            inv_rms,
             rms_weight,
             threads_per_group=threads_per_group,
             verbose=False,
