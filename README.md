@@ -67,8 +67,8 @@ End-to-end MHCLayer (auto-dispatch, median speedup with p10-p90):
 
 | Mode       | Forward | Backward |
 |------------|---------|----------|
-| Throughput | 2.53x (1.01-7.25) | 2.99x (1.06-6.24) |
-| Latency    | 0.98x (0.54-1.78) | 1.12x (0.66-2.00) |
+| Throughput | 2.49x (0.91-7.02) | 2.90x (1.01-5.86) |
+| Latency    | 1.00x (0.71-1.78) | 1.23x (0.95-2.32) |
 
 ## Usage
 
