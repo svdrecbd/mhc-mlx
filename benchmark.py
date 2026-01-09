@@ -318,6 +318,7 @@ def _run_case(
         auto_dispatch=(args.metal_dispatch == "auto"),
         compile_reference=False,
         hybrid_latency=args.hybrid_latency,
+        hybrid_min_C=args.hybrid_min_C,
         fused_backward=args.fused_backward,
     )
 
@@ -338,6 +339,27 @@ def _run_case(
     mx.eval(H_post_act)
     mx.eval(rms_weight)
 
+    use_auto_dispatch = args.metal_dispatch == "auto"
+    use_hybrid = (
+        use_auto_dispatch
+        and args.hybrid_latency
+        and n == 32
+        and B == 1
+        and C >= args.hybrid_min_C
+    )
+    use_ref_fallback = use_auto_dispatch and n == 32 and B == 1 and not use_hybrid
+    use_fused_metal = not use_hybrid and not use_ref_fallback
+    fused_backward_effective = (
+        args.fused_backward
+        and use_fused_metal
+        and (not use_auto_dispatch or (B * n >= 64 or C >= 4096))
+    )
+    dispatch_path = "fused_metal"
+    if use_ref_fallback:
+        dispatch_path = "reference"
+    elif use_hybrid:
+        dispatch_path = "hybrid"
+
     common = {
         **base,
         "B": B,
@@ -350,15 +372,10 @@ def _run_case(
         "queue_guard": args.queue_guard,
         "threads_per_group": tpg,
         "seed": args.seed + case_id,
+        "dispatch_path": dispatch_path,
+        "hybrid_min_C": args.hybrid_min_C,
+        "fused_backward_effective": fused_backward_effective,
     }
-
-    use_auto_dispatch = args.metal_dispatch == "auto"
-    use_hybrid = use_auto_dispatch and args.hybrid_latency and n == 32 and B == 1
-    use_ref_fallback = use_auto_dispatch and (not args.hybrid_latency) and n == 32 and B == 1
-    use_fused_metal = not use_hybrid and not use_ref_fallback
-    fused_backward_effective = (
-        args.fused_backward and (not use_auto_dispatch or B >= 8) and use_fused_metal
-    )
 
     if not args.no_correctness:
         y_ref = ref(x)
@@ -622,7 +639,8 @@ def _run_case(
         )
 
     print(
-        f"[{args.mode}] case {case_id}: B={B} n={n} C={C} dtype={_dtype_name(dtype)} tpg={tpg}"
+        f"[{args.mode}] case {case_id}: B={B} n={n} C={C} dtype={_dtype_name(dtype)} "
+        f"tpg={tpg} path={dispatch_path} fused_bw={fused_backward_effective}"
     )
 
 
@@ -641,7 +659,8 @@ def main():
     parser.add_argument("--metal-dispatch", type=str, choices=["auto", "force"], default="auto")
     parser.add_argument("--hybrid-latency", dest="hybrid_latency", action="store_true")
     parser.add_argument("--no-hybrid-latency", dest="hybrid_latency", action="store_false")
-    parser.set_defaults(hybrid_latency=True)
+    parser.set_defaults(hybrid_latency=False)
+    parser.add_argument("--hybrid-min-C", type=int, default=8192)
     parser.add_argument("--queue-guard", type=int, default=50)
     parser.add_argument("--modes", type=str, default="throughput,latency")
     parser.add_argument("--mode", type=str, choices=["throughput", "latency"], default=None)

@@ -12,8 +12,8 @@ The forward semantics match the reference implementation in this repo:
 
 The Metal fast path uses custom kernels for Sinkhorn and a fused RMSNorm/mix/add pass.
 Backward uses Metal kernels (no reference VJPs).
-Auto-dispatch defaults to Metal for n <= 16 and uses a latency-friendly hybrid
-path for n == 32, B == 1 (or reference fallback if hybrid is disabled).
+Auto-dispatch defaults to Metal for n <= 16 and uses a reference fallback for the
+latency corner (n == 32, B == 1). The hybrid path is opt-in and gated on C.
 """
 
 from __future__ import annotations
@@ -49,7 +49,8 @@ class MHCLayer(nn.Module):
         identity_init: bool = True,
         auto_dispatch: bool = True,
         compile_reference: bool | None = None,
-        hybrid_latency: bool = True,
+        hybrid_latency: bool = False,
+        hybrid_min_C: int = 8192,
         fused_backward: bool = True,
     ):
         super().__init__()
@@ -58,6 +59,8 @@ class MHCLayer(nn.Module):
             raise ValueError("n must be positive")
         if C <= 0:
             raise ValueError("C must be positive")
+        if hybrid_min_C <= 0:
+            raise ValueError("hybrid_min_C must be positive")
 
         self.n = int(n)
         self.C = int(C)
@@ -66,6 +69,7 @@ class MHCLayer(nn.Module):
         self.use_metal = bool(use_metal)
         self.auto_dispatch = bool(auto_dispatch)
         self.hybrid_latency = bool(hybrid_latency)
+        self.hybrid_min_C = int(hybrid_min_C)
         self.fused_backward = bool(fused_backward)
         if threads_per_group is None:
             self.threads_per_group = suggest_threads_per_group(self.C)
@@ -108,12 +112,14 @@ class MHCLayer(nn.Module):
     def _should_use_hybrid(self, B: int, n: int, C: int) -> bool:
         if not self.use_metal or not self.auto_dispatch or not self.hybrid_latency:
             return False
-        return n == 32 and B == 1
+        return n == 32 and B == 1 and C >= self.hybrid_min_C
 
     def _should_use_reference_fallback(self, B: int, n: int, C: int) -> bool:
-        if not self.use_metal or not self.auto_dispatch or self.hybrid_latency:
+        if not self.use_metal or not self.auto_dispatch:
             return False
-        return n == 32 and B == 1
+        if n == 32 and B == 1:
+            return not self._should_use_hybrid(B, n, C)
+        return False
 
     def _should_use_fused_backward(self, B: int, n: int, C: int) -> bool:
         if not self.fused_backward:
@@ -121,7 +127,7 @@ class MHCLayer(nn.Module):
         if not self.auto_dispatch:
             return True
         # Small batches under-occupy the fused backward kernel.
-        return B >= 8
+        return (B * n) >= 64 or C >= 4096
 
     def _reference_forward(
         self,
