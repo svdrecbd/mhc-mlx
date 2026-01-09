@@ -155,7 +155,9 @@ If you want to see the generated Metal source for debugging:
   The Metal path exposes gradients via Metal backward kernels (no reference VJPs).
   If you need `mx.compile` on the backward pass, set fused_backward=False to use the non-fused kernels.
 
-- For inference, use_metal=True is fine and is the intended use. Auto-dispatch uses fused Metal for most shapes; in latency mode it avoids fused Metal for n == 32 with `C <= latency_avoid_fused_n32_max_C` or B == 1 with `n >= latency_avoid_fused_B1_min_n`, routing to the compiled reference fallback (or hybrid when enabled and eligible). Use `auto_dispatch=False` to force fused Metal.
+- For inference, use_metal=True is fine and is the intended use. Auto-dispatch uses fused Metal for most shapes; in latency mode it avoids fused Metal for n == 32 with `C <= latency_avoid_fused_n32_max_C` or B == 1 with `n >= latency_avoid_fused_B1_min_n`, routing to the compiled reference fallback (or hybrid when enabled and eligible).
+- In throughput mode, fused Metal for n == 32 is only allowed when `B >= throughput_allow_fused_n32_min_B` and `C >= throughput_allow_fused_n32_min_C`.
+- Use `auto_dispatch=False` to force fused Metal.
 - With auto-dispatch, backward prefers the non-fused kernels unless `B*n >= 64` or `C >= 4096`; set `auto_dispatch=False` to force fused backward.
 
 ## Extending This Repo

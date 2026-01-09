@@ -261,6 +261,8 @@ def _base_record(args, device: str, chip: str, machine: str, macos: str, mlx_ver
         "hybrid_min_C": args.hybrid_min_C,
         "latency_avoid_fused_n32_max_C": args.latency_avoid_fused_n32_max_C,
         "latency_avoid_fused_B1_min_n": args.latency_avoid_fused_B1_min_n,
+        "throughput_allow_fused_n32_min_B": args.throughput_allow_fused_n32_min_B,
+        "throughput_allow_fused_n32_min_C": args.throughput_allow_fused_n32_min_C,
         "fused_backward": args.fused_backward,
         "with_backward": args.with_backward,
         "threads_per_group": args.threads_per_group,
@@ -330,6 +332,8 @@ def _run_case(
         hybrid_min_C=args.hybrid_min_C,
         latency_avoid_fused_n32_max_C=args.latency_avoid_fused_n32_max_C,
         latency_avoid_fused_B1_min_n=args.latency_avoid_fused_B1_min_n,
+        throughput_allow_fused_n32_min_B=args.throughput_allow_fused_n32_min_B,
+        throughput_allow_fused_n32_min_C=args.throughput_allow_fused_n32_min_C,
         fused_backward=args.fused_backward,
     )
 
@@ -352,12 +356,18 @@ def _run_case(
 
     use_auto_dispatch = args.metal_dispatch == "auto"
     use_latency_policy = dispatch_policy_effective == "latency"
+    use_throughput_policy = dispatch_policy_effective == "throughput"
     avoid_reasons = []
     if use_auto_dispatch and use_latency_policy:
         if n == 32 and C <= args.latency_avoid_fused_n32_max_C:
             avoid_reasons.append("fused_n32_smallC")
         if B == 1 and n >= args.latency_avoid_fused_B1_min_n:
             avoid_reasons.append("fused_B1_largeN")
+    if use_auto_dispatch and use_throughput_policy and n == 32:
+        if B < args.throughput_allow_fused_n32_min_B:
+            avoid_reasons.append("fused_n32_smallB")
+        if C < args.throughput_allow_fused_n32_min_C:
+            avoid_reasons.append("fused_n32_smallC")
     avoid_fused = bool(avoid_reasons)
     use_hybrid = (
         use_auto_dispatch
@@ -398,6 +408,8 @@ def _run_case(
         "hybrid_min_C": args.hybrid_min_C,
         "latency_avoid_fused_n32_max_C": args.latency_avoid_fused_n32_max_C,
         "latency_avoid_fused_B1_min_n": args.latency_avoid_fused_B1_min_n,
+        "throughput_allow_fused_n32_min_B": args.throughput_allow_fused_n32_min_B,
+        "throughput_allow_fused_n32_min_C": args.throughput_allow_fused_n32_min_C,
         "avoid_fused": avoid_fused,
         "avoid_reason": avoid_reason,
         "fused_backward_effective": fused_backward_effective,
@@ -697,6 +709,8 @@ def main():
     parser.add_argument("--hybrid-min-C", type=int, default=8192)
     parser.add_argument("--latency-avoid-fused-n32-max-C", type=int, default=2048)
     parser.add_argument("--latency-avoid-fused-B1-min-n", type=int, default=16)
+    parser.add_argument("--throughput-allow-fused-n32-min-B", type=int, default=8)
+    parser.add_argument("--throughput-allow-fused-n32-min-C", type=int, default=4096)
     parser.add_argument("--queue-guard", type=int, default=50)
     parser.add_argument("--modes", type=str, default="throughput,latency")
     parser.add_argument("--mode", type=str, choices=["throughput", "latency"], default=None)

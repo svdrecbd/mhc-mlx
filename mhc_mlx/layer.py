@@ -12,9 +12,10 @@ The forward semantics match the reference implementation in this repo:
 
 The Metal fast path uses custom kernels for Sinkhorn and a fused RMSNorm/mix/add pass.
 Backward uses Metal kernels (no reference VJPs).
-Auto-dispatch defaults to Metal and uses latency guardrails when
-dispatch_policy is "auto"/"latency" (e.g., avoid fused Metal for n == 32 with small C,
-or B == 1 with larger n). The hybrid path is opt-in and gated on C.
+Auto-dispatch defaults to Metal and applies dispatch guardrails based on the
+policy ("latency" avoids fused for n == 32 with small C or B == 1 with larger n,
+"throughput" only allows n == 32 fused when B and C are large). The hybrid path is
+opt-in and gated on C.
 """
 
 from __future__ import annotations
@@ -55,6 +56,8 @@ class MHCLayer(nn.Module):
         hybrid_min_C: int = 8192,
         latency_avoid_fused_n32_max_C: int = 2048,
         latency_avoid_fused_B1_min_n: int = 16,
+        throughput_allow_fused_n32_min_B: int = 8,
+        throughput_allow_fused_n32_min_C: int = 4096,
         fused_backward: bool = True,
     ):
         super().__init__()
@@ -71,6 +74,10 @@ class MHCLayer(nn.Module):
             raise ValueError("latency_avoid_fused_n32_max_C must be positive")
         if latency_avoid_fused_B1_min_n <= 0:
             raise ValueError("latency_avoid_fused_B1_min_n must be positive")
+        if throughput_allow_fused_n32_min_B <= 0:
+            raise ValueError("throughput_allow_fused_n32_min_B must be positive")
+        if throughput_allow_fused_n32_min_C <= 0:
+            raise ValueError("throughput_allow_fused_n32_min_C must be positive")
 
         self.n = int(n)
         self.C = int(C)
@@ -83,6 +90,8 @@ class MHCLayer(nn.Module):
         self.hybrid_min_C = int(hybrid_min_C)
         self.latency_avoid_fused_n32_max_C = int(latency_avoid_fused_n32_max_C)
         self.latency_avoid_fused_B1_min_n = int(latency_avoid_fused_B1_min_n)
+        self.throughput_allow_fused_n32_min_B = int(throughput_allow_fused_n32_min_B)
+        self.throughput_allow_fused_n32_min_C = int(throughput_allow_fused_n32_min_C)
         self.fused_backward = bool(fused_backward)
         if threads_per_group is None:
             self.threads_per_group = suggest_threads_per_group(self.C)
@@ -129,15 +138,26 @@ class MHCLayer(nn.Module):
             return False
         return True
 
+    def _throughput_policy_enabled(self) -> bool:
+        return self.dispatch_policy == "throughput"
+
     def _should_avoid_fused(self, B: int, n: int, C: int) -> bool:
         if not self.use_metal or not self.auto_dispatch:
             return False
         if not self._latency_policy_enabled():
-            return False
-        if n == 32 and C <= self.latency_avoid_fused_n32_max_C:
-            return True
-        if B == 1 and n >= self.latency_avoid_fused_B1_min_n:
-            return True
+            if not self._throughput_policy_enabled():
+                return False
+        if self._latency_policy_enabled():
+            if n == 32 and C <= self.latency_avoid_fused_n32_max_C:
+                return True
+            if B == 1 and n >= self.latency_avoid_fused_B1_min_n:
+                return True
+        if self._throughput_policy_enabled():
+            if n == 32:
+                if B < self.throughput_allow_fused_n32_min_B:
+                    return True
+                if C < self.throughput_allow_fused_n32_min_C:
+                    return True
         return False
 
     def _should_use_hybrid(self, B: int, n: int, C: int) -> bool:
