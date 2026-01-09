@@ -122,3 +122,21 @@ Auto-dispatch benchmark (speedup = reference / Metal, >1 is faster):
 - `kernels/stream_mix_add.metal`: stream mix + add(y_dist) kernel body (used by hybrid latency path)
 - `test_correctness.py`: reference vs Metal comparisons
 - `benchmark.py`: benchmark suite with correctness checks and JSONL output
+
+## Paper
+
+**mHC: Manifold-Constrained Hyper-Connections**  
+https://arxiv.org/abs/2512.24880
+
+DeepSeek-AI
+
+## Citation
+
+```bibtex
+@article{xie2025mhc,
+  title={mHC: Manifold-Constrained Hyper-Connections},
+  author={Xie, Zhenda and Wei, Yixuan and Cao, Huanqi and Zhao, Chenggang and Deng, Chengqi and Li, Jiashi and Dai, Damai and Gao, Huazuo and Chang, Jiang and Zhao, Liang and Zhou, Shangyan and Xu, Zhean and Zhang, Zhengyan and Zeng, Wangding and Hu, Shengding and Wang, Yuqing and Yuan, Jingyang and Wang, Lean and Liang, Wenfeng},
+  journal={arXiv preprint arXiv:2512.24880},
+  year={2025}
+}
+```
