@@ -2,7 +2,9 @@
 
 **High-performance MLX implementation of Manifold-Constrained Hyper-Connections (mHC)** for Apple Silicon.
 
-This library provides a drop-in `MHCLayer` that fuses multiple operations into optimized Metal kernels, achieving significant speedups over standard implementations.
+This library provides a drop-in `MHCLayer` that fuses multiple operations into optimized Metal kernels, achieving massive speedups over compiled reference layers.
+
+**Original Paper:** [mHC: Manifold-Constrained Hyper-Connections](https://arxiv.org/abs/2512.24880) (DeepSeek-AI)
 
 ## Installation
 
@@ -44,7 +46,7 @@ We benchmarked on an Apple M4 Pro (macOS 15.6). `mhc-mlx` automatically selects 
 
 Optimized for ultra-low latency response times.
 
-| Channels (C) | Kernel Strategy | Speedup vs Compiled MLX |
+| Channels (C) | Kernel Strategy | Layer Speedup |
 |---|---|---|
 | 256 | Fully Fused | **2.27x** |
 | 1024 | Fully Fused | **1.57x** |
@@ -54,12 +56,13 @@ Optimized for ultra-low latency response times.
 
 ### High Throughput ($B=32$, Sequence Length=32)
 
-Optimized for maximum data processing rate.
+Maximum speedups for heavy data processing.
 
-| Channels (C) | Kernel Strategy | Speedup vs Compiled MLX |
+| Operation | Scale (n, C) | Peak Speedup |
 |---|---|---|
-| 2048 | Column Parallel | **13.19x** |
-| 8192 | Column Parallel | **12.36x** |
+| **Sinkhorn-Knopp** | n=4 | **26.99x** |
+| **Mix + Add (Fused)** | n=32, C=2048 | **14.92x** |
+| **Full MHCLayer** | n=4, C=4096 | **17.33x** |
 
 *(Benchmarks run with bfloat16)*
 
@@ -71,7 +74,7 @@ mhc-mlx-bench --mode throughput --B 32
 
 ## Key Optimizations
 
-- **Fully Fused Kernel:** Single kernel for Aggregate + RMS + Mix + Add. Ideal for $B \times C \le 2048$.
+- **Fully Fused Kernel:** Single kernel for Aggregate + RMS + Mix + Add. Ideal for $B 	imes C \le 2048$.
 - **Column-Parallel Mixing:** Vectorized kernel maximizing throughput for larger workloads.
 - **Adaptive Dispatch:** Runtime heuristic selects the fastest kernel.
 - **Super-Fused Backward:** Fused gradients for maximum training efficiency.
