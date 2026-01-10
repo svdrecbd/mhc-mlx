@@ -1,19 +1,21 @@
 """Metal fast path.
 
 This file contains the pieces that call mlx.core.fast.metal_kernel.
-The Metal kernels live in kernels/ and are kernel bodies, not full .metal libraries.
+The Metal kernels live in mhc_mlx/kernels/ and are kernel bodies, not full .metal libraries.
 
 Forward and backward use Metal kernels.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
+import platform
 from functools import lru_cache
 
 import mlx.core as mx
 
-_KERNEL_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "kernels")
+_KERNEL_DIR = os.path.join(os.path.dirname(__file__), "kernels")
 _STREAM_MIX_ADD_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add.metal")
 _STREAM_MIX_ADD_RMS_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms.metal")
 _STREAM_MIX_ADD_RMS_FP16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_fp16.metal")
@@ -82,6 +84,62 @@ def _render_source(path: str, **replacements: str) -> str:
     return source
 
 
+def _metal_device_name() -> str | None:
+    try:
+        metal = getattr(mx, "metal", None)
+        if metal is None:
+            return None
+        device_fn = getattr(metal, "device", None)
+        if device_fn is None:
+            return None
+        device = device_fn()
+        name = getattr(device, "name", None)
+        if name:
+            return str(name)
+    except Exception:
+        return None
+    return None
+
+
+@lru_cache(maxsize=1)
+def _kernel_cache_key() -> str:
+    override = os.getenv("MHC_MLX_KERNEL_CACHE_KEY")
+    if override:
+        return override
+
+    parts = []
+    mlx_version = getattr(mx, "__version__", "unknown")
+    parts.append(f"mlx={mlx_version}")
+    macos_version = platform.mac_ver()[0] or platform.platform()
+    parts.append(f"macos={macos_version}")
+    parts.append(f"machine={platform.machine()}")
+
+    if os.getenv("MHC_MLX_KERNEL_CACHE_INCLUDE_DEVICE", "1") == "1":
+        device = _metal_device_name()
+        if device:
+            parts.append(f"gpu={device}")
+
+    return "|".join(parts)
+
+
+def _kernel_name(base: str, source: str) -> str:
+    cache_key = _kernel_cache_key()
+    src_hash = hashlib.sha256(source.encode("utf-8")).hexdigest()[:8]
+    key_hash = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:8]
+    return f"{base}_{src_hash}_{key_hash}"
+
+
+def _make_kernel(*, name: str, source: str, input_names, output_names, **kwargs) -> object:
+    kwargs.setdefault("ensure_row_contiguous", True)
+    return mx.fast.metal_kernel(
+        name=_kernel_name(name, source),
+        input_names=input_names,
+        output_names=output_names,
+        source=source,
+        **kwargs,
+    )
+
+
 def _maybe_print_source(source: str, name: str, verbose: bool) -> None:
     if verbose:
         print(f"--- {name} kernel source ---")
@@ -105,7 +163,7 @@ def _match_structure(primals, grads):
 @lru_cache(maxsize=8)
 def _stream_mix_add_kernel(max_n: int) -> object:
     source = _stream_mix_add_source(max_n)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="stream_mix_add",
         input_names=["x", "M", "y_dist"],
         output_names=["out"],
@@ -124,7 +182,7 @@ def _stream_mix_add_source(max_n: int) -> str:
 @lru_cache(maxsize=8)
 def _stream_mix_add_rms_kernel(max_n: int) -> object:
     source = _stream_mix_add_rms_source(max_n)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="stream_mix_add_rms",
         input_names=["x", "M", "H_post", "y_agg", "inv_rms", "rms_weight"],
         output_names=["out"],
@@ -143,7 +201,7 @@ def _stream_mix_add_rms_source(max_n: int) -> str:
 @lru_cache(maxsize=8)
 def _stream_mix_add_rms_fp16_kernel(max_n: int) -> object:
     source = _stream_mix_add_rms_fp16_source(max_n)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="stream_mix_add_rms_fp16",
         input_names=["x", "M", "H_post", "y_agg", "inv_rms", "rms_weight"],
         output_names=["out"],
@@ -162,7 +220,7 @@ def _stream_mix_add_rms_fp16_source(max_n: int) -> str:
 @lru_cache(maxsize=8)
 def _stream_mix_add_rms_bf16_kernel(max_n: int) -> object:
     source = _stream_mix_add_rms_bf16_source(max_n)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="stream_mix_add_rms_bf16",
         input_names=["x", "M", "H_post", "y_agg", "inv_rms", "rms_weight"],
         output_names=["out"],
@@ -181,7 +239,7 @@ def _stream_mix_add_rms_bf16_source(max_n: int) -> str:
 @lru_cache(maxsize=8)
 def _stream_mix_add_rms_tile_kernel(max_n: int) -> object:
     source = _stream_mix_add_rms_tile_source(max_n)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="stream_mix_add_rms_tile",
         input_names=["x", "M", "H_post", "y_agg", "inv_rms", "rms_weight"],
         output_names=["out"],
@@ -200,7 +258,7 @@ def _stream_mix_add_rms_tile_source(max_n: int) -> str:
 @lru_cache(maxsize=8)
 def _stream_mix_add_rms_tile2d_fp16_kernel(max_n: int) -> object:
     source = _stream_mix_add_rms_tile2d_fp16_source(max_n)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="stream_mix_add_rms_tile2d_fp16",
         input_names=["x", "M", "H_post", "y_agg", "inv_rms", "rms_weight"],
         output_names=["out"],
@@ -219,7 +277,7 @@ def _stream_mix_add_rms_tile2d_fp16_source(max_n: int) -> str:
 @lru_cache(maxsize=8)
 def _stream_mix_add_rms_tile2d_bf16_kernel(max_n: int) -> object:
     source = _stream_mix_add_rms_tile2d_bf16_source(max_n)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="stream_mix_add_rms_tile2d_bf16",
         input_names=["x", "M", "H_post", "y_agg", "inv_rms", "rms_weight"],
         output_names=["out"],
@@ -238,7 +296,7 @@ def _stream_mix_add_rms_tile2d_bf16_source(max_n: int) -> str:
 @lru_cache(maxsize=8)
 def _stream_mix_add_rms_tile_f32_kernel(tile_n: int, tile_c: int) -> object:
     source = _stream_mix_add_rms_tile_f32_source(tile_n, tile_c)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="stream_mix_add_rms_tile_f32",
         input_names=["x", "M", "H_post", "y_agg", "inv_rms", "rms_weight"],
         output_names=["out"],
@@ -258,7 +316,7 @@ def _stream_mix_add_rms_tile_f32_source(tile_n: int, tile_c: int) -> str:
 @lru_cache(maxsize=8)
 def _stream_mix_add_rms_tile_fp16_kernel(tile_n: int, tile_c: int) -> object:
     source = _stream_mix_add_rms_tile_fp16_source(tile_n, tile_c)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="stream_mix_add_rms_tile_fp16",
         input_names=["x", "M", "H_post", "y_agg", "inv_rms", "rms_weight"],
         output_names=["out"],
@@ -278,7 +336,7 @@ def _stream_mix_add_rms_tile_fp16_source(tile_n: int, tile_c: int) -> str:
 @lru_cache(maxsize=8)
 def _stream_mix_add_rms_tile_bf16_kernel(tile_n: int, tile_c: int) -> object:
     source = _stream_mix_add_rms_tile_bf16_source(tile_n, tile_c)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="stream_mix_add_rms_tile_bf16",
         input_names=["x", "M", "H_post", "y_agg", "inv_rms", "rms_weight"],
         output_names=["out"],
@@ -298,7 +356,7 @@ def _stream_mix_add_rms_tile_bf16_source(tile_n: int, tile_c: int) -> str:
 @lru_cache(maxsize=32)
 def _sinkhorn_kernel(max_n: int, iters: int, eps: float) -> object:
     source = _sinkhorn_source(max_n, iters, eps)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="sinkhorn_knopp",
         input_names=["H_res"],
         output_names=["out"],
@@ -320,7 +378,7 @@ def _sinkhorn_source(max_n: int, iters: int, eps: float) -> str:
 @lru_cache(maxsize=16)
 def _mhc_fused_kernel(max_n: int, eps: float) -> object:
     source = _mhc_fused_source(max_n, eps)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="mhc_fused",
         input_names=["x", "M", "H_pre", "H_post", "rms_weight"],
         output_names=["out"],
@@ -341,7 +399,7 @@ def _mhc_fused_source(max_n: int, eps: float) -> str:
 @lru_cache(maxsize=16)
 def _mhc_forward_agg_kernel(max_n: int) -> object:
     source = _mhc_forward_agg_source(max_n)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="mhc_forward_agg",
         input_names=["x", "H_pre"],
         output_names=["y_agg", "partial_sq"],
@@ -361,7 +419,7 @@ def _mhc_forward_agg_source(max_n: int) -> str:
 @lru_cache(maxsize=16)
 def _mhc_forward_agg_bf16_kernel(max_n: int) -> object:
     source = _mhc_forward_agg_bf16_source(max_n)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="mhc_forward_agg_bf16",
         input_names=["x", "H_pre"],
         output_names=["y_agg", "partial_sq"],
@@ -381,7 +439,7 @@ def _mhc_forward_agg_bf16_source(max_n: int) -> str:
 @lru_cache(maxsize=16)
 def _mhc_forward_rms_reduce_kernel(eps: float) -> object:
     source = _mhc_forward_rms_reduce_source(eps)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="mhc_forward_rms_reduce",
         input_names=["y_agg", "partial_sq"],
         output_names=["inv_rms"],
@@ -401,7 +459,7 @@ def _mhc_forward_rms_reduce_source(eps: float) -> str:
 @lru_cache(maxsize=32)
 def _sinkhorn_backward_kernel(max_n: int, iters: int, eps: float) -> object:
     source = _sinkhorn_backward_source(max_n, iters, eps)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="sinkhorn_knopp_backward",
         input_names=["H_res", "dM"],
         output_names=["dH_res"],
@@ -423,7 +481,7 @@ def _sinkhorn_backward_source(max_n: int, iters: int, eps: float) -> str:
 @lru_cache(maxsize=16)
 def _mhc_backward_prep_kernel(max_n: int, eps: float) -> object:
     source = _mhc_backward_prep_source(max_n, eps)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="mhc_backward_prep",
         input_names=["x", "H_pre", "H_post", "rms_weight", "d_out"],
         output_names=["y_agg", "d_y_norm", "inv_rms", "d_r"],
@@ -444,7 +502,7 @@ def _mhc_backward_prep_source(max_n: int, eps: float) -> str:
 @lru_cache(maxsize=16)
 def _mhc_backward_prep_tile_kernel(max_n: int) -> object:
     source = _mhc_backward_prep_tile_source(max_n)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="mhc_backward_prep_tile",
         input_names=["x", "H_pre", "H_post", "rms_weight", "d_out"],
         output_names=["y_agg", "d_y_norm", "partial_sq", "partial_dr"],
@@ -464,7 +522,7 @@ def _mhc_backward_prep_tile_source(max_n: int) -> str:
 @lru_cache(maxsize=16)
 def _mhc_backward_rms_reduce_kernel(eps: float) -> object:
     source = _mhc_backward_rms_reduce_source(eps)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="mhc_backward_rms_reduce",
         input_names=["y_agg", "partial_sq", "partial_dr"],
         output_names=["inv_rms", "d_r"],
@@ -484,7 +542,7 @@ def _mhc_backward_rms_reduce_source(eps: float) -> str:
 @lru_cache(maxsize=16)
 def _mhc_backward_dx_kernel(max_n: int) -> object:
     source = _mhc_backward_dx_source(max_n)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="mhc_backward_dx",
         input_names=[
             "x",
@@ -513,7 +571,7 @@ def _mhc_backward_dx_source(max_n: int) -> str:
 @lru_cache(maxsize=16)
 def _mhc_backward_fused_dx_kernel(max_n: int, eps: float) -> object:
     source = _mhc_backward_fused_dx_source(max_n, eps)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="mhc_backward_fused_dx",
         input_names=["x", "M", "H_pre", "H_post", "rms_weight", "d_out"],
         output_names=["dx", "y_agg", "d_y_norm", "inv_rms", "d_r"],
@@ -534,7 +592,7 @@ def _mhc_backward_fused_dx_source(max_n: int, eps: float) -> str:
 @lru_cache(maxsize=16)
 def _mhc_backward_dM_kernel() -> object:
     source = _mhc_backward_dM_source()
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="mhc_backward_dM",
         input_names=["x", "d_out"],
         output_names=["dM"],
@@ -553,7 +611,7 @@ def _mhc_backward_dM_source() -> str:
 @lru_cache(maxsize=16)
 def _mhc_backward_dH_pre_kernel() -> object:
     source = _mhc_backward_dH_pre_source()
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="mhc_backward_dH_pre",
         input_names=["x", "y_agg", "d_y_norm", "inv_rms", "d_r", "rms_weight"],
         output_names=["dH_pre"],
@@ -572,7 +630,7 @@ def _mhc_backward_dH_pre_source() -> str:
 @lru_cache(maxsize=16)
 def _mhc_backward_dH_post_kernel() -> object:
     source = _mhc_backward_dH_post_source()
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="mhc_backward_dH_post",
         input_names=["d_out", "y_agg", "inv_rms", "rms_weight"],
         output_names=["dH_post"],
@@ -591,7 +649,7 @@ def _mhc_backward_dH_post_source() -> str:
 @lru_cache(maxsize=16)
 def _mhc_backward_dH_pre_post_kernel() -> object:
     source = _mhc_backward_dH_pre_post_source()
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="mhc_backward_dH_pre_post",
         input_names=["x", "d_out", "y_agg", "d_y_norm", "inv_rms", "d_r", "rms_weight"],
         output_names=["dH_pre", "dH_post"],
@@ -610,7 +668,7 @@ def _mhc_backward_dH_pre_post_source() -> str:
 @lru_cache(maxsize=16)
 def _mhc_backward_drms_kernel() -> object:
     source = _mhc_backward_drms_source()
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="mhc_backward_drms",
         input_names=["y_agg", "d_y_norm", "inv_rms"],
         output_names=["d_rms_weight"],
@@ -626,7 +684,7 @@ def _mhc_backward_drms_source() -> str:
 @lru_cache(maxsize=8)
 def _stream_mix_backward_dx_kernel(max_n: int) -> object:
     source = _stream_mix_backward_dx_source(max_n)
-    return mx.fast.metal_kernel(
+    return _make_kernel(
         name="stream_mix_backward_dx",
         input_names=["M", "d_out"],
         output_names=["dx"],
@@ -656,8 +714,23 @@ def _ceil_div(a: int, b: int) -> int:
     return (a + b - 1) // b
 
 
+def _dtype_eq(a, b) -> bool:
+    if a is b:
+        return True
+    if a is None or b is None:
+        return False
+    try:
+        return a == b
+    except TypeError:
+        return str(a) == str(b)
+
+
+def _dtype_in(a, options) -> bool:
+    return any(_dtype_eq(a, opt) for opt in options)
+
+
 def _maybe_cast_float32(x: mx.array) -> mx.array:
-    if x.dtype in (mx.float16, mx.float32):
+    if _dtype_in(x.dtype, (mx.float16, mx.float32)):
         return x
     return x.astype(mx.float32)
 
@@ -665,7 +738,7 @@ def _maybe_cast_float32(x: mx.array) -> mx.array:
 def _normalize_output_dtype(output_dtype: mx.Dtype | None) -> mx.Dtype | None:
     if output_dtype is None:
         return None
-    if output_dtype in (mx.float32, mx.float16, mx.bfloat16):
+    if _dtype_in(output_dtype, (mx.float32, mx.float16, mx.bfloat16)):
         return output_dtype
     raise ValueError(f"unsupported output_dtype: {output_dtype}")
 
@@ -678,11 +751,11 @@ def _normalize_mix_kernel(mix_kernel: str) -> str:
 
 
 def _output_dtype_key(output_dtype: mx.Dtype | None) -> str:
-    if output_dtype is None or output_dtype == mx.float32:
+    if output_dtype is None or _dtype_eq(output_dtype, mx.float32):
         return "float32"
-    if output_dtype == mx.float16:
+    if _dtype_eq(output_dtype, mx.float16):
         return "float16"
-    if output_dtype == mx.bfloat16:
+    if _dtype_eq(output_dtype, mx.bfloat16):
         return "bfloat16"
     raise ValueError(f"unsupported output_dtype: {output_dtype}")
 
@@ -702,7 +775,9 @@ def _mix_add_rms_tile_config(
 ) -> tuple[int, int, int, int] | None:
     if n not in (16, 32):
         return None
-    if output_dtype is not None and (output_dtype == mx.float16 or output_dtype == mx.bfloat16):
+    if output_dtype is not None and (
+        _dtype_eq(output_dtype, mx.float16) or _dtype_eq(output_dtype, mx.bfloat16)
+    ):
         tile_c = 8 if n == 16 else 4
         vec = 2
     else:
@@ -730,7 +805,7 @@ def mix_add_rms_threadgroup_size(
     if output_dtype is None and n >= 16:
         tpg_x = _tile_tpg_x(n, threads_per_group)
         return int(tpg_x * n)
-    if output_dtype in (mx.float16, mx.bfloat16) and n >= 16:
+    if _dtype_in(output_dtype, (mx.float16, mx.bfloat16)) and n >= 16:
         tpg_x = _tile_tpg_x(n, threads_per_group)
         return int(tpg_x * n)
     tile_cfg = _mix_add_rms_tile_config(n, output_dtype)
@@ -792,7 +867,6 @@ def stream_mix_add_metal(
         _maybe_print_source(_stream_mix_add_source(max_n), "stream_mix_add", verbose=True)
 
     x_in = _maybe_cast_float32(x)
-    d_out_in = _maybe_cast_float32(d_out)
     M_f = M.astype(mx.float32)
     y_f = y_dist.astype(mx.float32)
 
@@ -871,7 +945,7 @@ def stream_mix_add_rms_metal(
                 threads_per_group=threads_per_group,
                 verbose=verbose,
             )
-        if output_dtype == mx.float16:
+        if _dtype_eq(output_dtype, mx.float16):
             return stream_mix_add_rms_tile2d_fp16_metal(
                 x,
                 M,
@@ -882,7 +956,7 @@ def stream_mix_add_rms_metal(
                 threads_per_group=threads_per_group,
                 verbose=verbose,
             )
-        if output_dtype == mx.bfloat16:
+        if _dtype_eq(output_dtype, mx.bfloat16):
             return stream_mix_add_rms_tile2d_bf16_metal(
                 x,
                 M,
@@ -904,7 +978,7 @@ def stream_mix_add_rms_metal(
             threads_per_group=threads_per_group,
             verbose=verbose,
         )
-    if mix_kernel == "auto" and output_dtype == mx.float16 and n >= 16:
+    if mix_kernel == "auto" and _dtype_eq(output_dtype, mx.float16) and n >= 16:
         return stream_mix_add_rms_tile2d_fp16_metal(
             x,
             M,
@@ -915,7 +989,7 @@ def stream_mix_add_rms_metal(
             threads_per_group=threads_per_group,
             verbose=verbose,
         )
-    if mix_kernel == "auto" and output_dtype == mx.bfloat16 and n >= 16:
+    if mix_kernel == "auto" and _dtype_eq(output_dtype, mx.bfloat16) and n >= 16:
         return stream_mix_add_rms_tile2d_bf16_metal(
             x,
             M,
@@ -937,13 +1011,13 @@ def stream_mix_add_rms_metal(
 
     if verbose:
         if mix_kernel == "2d":
-            if output_dtype == mx.float16:
+            if _dtype_eq(output_dtype, mx.float16):
                 _maybe_print_source(
                     _stream_mix_add_rms_tile2d_fp16_source(max_n),
                     "stream_mix_add_rms_tile2d_fp16",
                     True,
                 )
-            elif output_dtype == mx.bfloat16:
+            elif _dtype_eq(output_dtype, mx.bfloat16):
                 _maybe_print_source(
                     _stream_mix_add_rms_tile2d_bf16_source(max_n),
                     "stream_mix_add_rms_tile2d_bf16",
@@ -953,13 +1027,13 @@ def stream_mix_add_rms_metal(
                 _maybe_print_source(_stream_mix_add_rms_tile_source(max_n), "stream_mix_add_rms_tile", True)
         elif tile_cfg is not None:
             tile_c, _, _, _ = tile_cfg
-            if output_dtype == mx.float16:
+            if _dtype_eq(output_dtype, mx.float16):
                 _maybe_print_source(
                     _stream_mix_add_rms_tile_fp16_source(n, tile_c),
                     "stream_mix_add_rms_tile_fp16",
                     True,
                 )
-            elif output_dtype == mx.bfloat16:
+            elif _dtype_eq(output_dtype, mx.bfloat16):
                 _maybe_print_source(
                     _stream_mix_add_rms_tile_bf16_source(n, tile_c),
                     "stream_mix_add_rms_tile_bf16",
@@ -971,13 +1045,13 @@ def stream_mix_add_rms_metal(
                     "stream_mix_add_rms_tile_f32",
                     True,
                 )
-        elif output_dtype == mx.float16:
+        elif _dtype_eq(output_dtype, mx.float16):
             _maybe_print_source(_stream_mix_add_rms_fp16_source(max_n), "stream_mix_add_rms_fp16", True)
-        elif output_dtype == mx.bfloat16:
+        elif _dtype_eq(output_dtype, mx.bfloat16):
             _maybe_print_source(_stream_mix_add_rms_bf16_source(max_n), "stream_mix_add_rms_bf16", True)
         else:
             _maybe_print_source(_stream_mix_add_rms_source(max_n), "stream_mix_add_rms", True)
-    if output_dtype is None or output_dtype == mx.float32:
+    if output_dtype is None or _dtype_eq(output_dtype, mx.float32):
         x_in = _maybe_cast_float32(x)
         if tile_cfg is None:
             kernel = _stream_mix_add_rms_kernel(max_n)
@@ -988,8 +1062,8 @@ def stream_mix_add_rms_metal(
             kernel = _stream_mix_add_rms_tile_f32_kernel(n, tile_c)
             grid_x = _ceil_div(C, tile_channels) * tpg
         out_dtype = mx.float32
-    elif output_dtype == mx.float16:
-        if x.dtype != mx.float16:
+    elif _dtype_eq(output_dtype, mx.float16):
+        if not _dtype_eq(x.dtype, mx.float16):
             raise ValueError("x must be float16 when output_dtype is float16")
         x_in = x
         if tile_cfg is None:
@@ -1001,8 +1075,8 @@ def stream_mix_add_rms_metal(
             kernel = _stream_mix_add_rms_tile_fp16_kernel(n, tile_c)
             grid_x = _ceil_div(C, tile_channels) * tpg
         out_dtype = mx.float16
-    elif output_dtype == mx.bfloat16:
-        if x.dtype != mx.bfloat16:
+    elif _dtype_eq(output_dtype, mx.bfloat16):
+        if not _dtype_eq(x.dtype, mx.bfloat16):
             raise ValueError("x must be bfloat16 when output_dtype is bfloat16")
         x_in = x
         if tile_cfg is None:
@@ -1138,7 +1212,7 @@ def stream_mix_add_rms_tile2d_fp16_metal(
         raise ValueError(f"inv_rms must be shape (B,)=( {B}, ), got {inv_rms.shape}")
     if rms_weight.shape != (C,):
         raise ValueError(f"rms_weight must be shape (C,)=( {C}, ), got {rms_weight.shape}")
-    if x.dtype != mx.float16:
+    if not _dtype_eq(x.dtype, mx.float16):
         raise ValueError("x must be float16 for float16 output")
 
     max_n = _validate_n(n)
@@ -1208,7 +1282,7 @@ def stream_mix_add_rms_tile2d_bf16_metal(
         raise ValueError(f"inv_rms must be shape (B,)=( {B}, ), got {inv_rms.shape}")
     if rms_weight.shape != (C,):
         raise ValueError(f"rms_weight must be shape (C,)=( {C}, ), got {rms_weight.shape}")
-    if x.dtype != mx.bfloat16:
+    if not _dtype_eq(x.dtype, mx.bfloat16):
         raise ValueError("x must be bfloat16 for bfloat16 output")
 
     max_n = _validate_n(n)
@@ -1321,7 +1395,7 @@ def mhc_forward_agg_metal(
 
     x_in: mx.array
     kernel: object
-    if x.dtype == mx.bfloat16:
+    if _dtype_eq(x.dtype, mx.bfloat16):
         if verbose:
             _maybe_print_source(_mhc_forward_agg_bf16_source(max_n), "mhc_forward_agg_bf16", True)
         x_in = x

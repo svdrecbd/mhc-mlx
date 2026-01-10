@@ -1,32 +1,22 @@
 # mhc-mlx
 
-Unofficial MLX + Metal implementation of mHC: Manifold-Constrained Hyper-Connections by DeepSeek-AI.
+Unofficial MLX + Metal implementation of mHC (Manifold-Constrained Hyper-Connections) by DeepSeek-AI.
+
+## What is mHC?
+
+mHC adds manifold-constrained residual mixing across multiple streams. This repo provides a faithful MLX reference path plus Metal kernels for fast Apple-silicon execution.
 
 ## Installation
 
 ```bash
 uv venv .venv
 source .venv/bin/activate
-uv pip install -e .
+uv pip install -e ".[dev]"
 
 # or
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .
-```
-
-## Quickstart
-
-Metal kernels JIT-compile on first use. Run correctness once to warm the cache:
-
-```bash
-python test_correctness.py
-```
-
-Basic benchmark (auto-dispatch):
-
-```bash
-python benchmark.py --metal-dispatch auto
+pip install -e ".[dev]"
 ```
 
 ## Usage
@@ -44,6 +34,34 @@ mx.eval(y)
 print(y.shape)  # (B, n, C)
 ```
 
+## Correctness
+
+Run the default correctness suite (also warms Metal JIT caches):
+
+```bash
+python run_correctness.py
+```
+
+Run the full pytest suite:
+
+```bash
+python -m pytest -m "not stress"
+```
+
+Stress tests (eps extremes, large C, seed sweep):
+
+```bash
+MHC_MLX_RUN_STRESS=1 python -m pytest -m stress
+```
+
+## Dispatch policies
+
+- `dispatch_policy="auto"`: always use fused Metal.
+- `dispatch_policy="latency"`: avoid fused Metal in latency corner cases (B=1 and/or n=32 small C).
+- `dispatch_policy="throughput"`: allow fused Metal for n=32 only when it wins.
+- `--metal-dispatch force`: benchmark flag to always use fused Metal.
+- `hybrid_latency=True`: opt-in hybrid path for the latency corner when C is large.
+
 ## Benchmark
 
 ### Run
@@ -55,18 +73,14 @@ python benchmark.py --metal-dispatch auto
 # Include backward
 python benchmark.py --with-backward --metal-dispatch auto
 
-# Enable hybrid for the latency corner (B=1, n=32) and gate by C
+# Latency policy (guardrails) + hybrid option
 python benchmark.py --mode latency --dispatch-policy latency --hybrid-latency --hybrid-min-C 4096
 
 # Safe throughput policy for n=32
 python benchmark.py --mode throughput --dispatch-policy throughput
 
-# Optional: reduce sync overhead variance for latency mode
+# Optional: reduce sync overhead variance in latency mode
 MLX_METAL_FAST_SYNCH=1 python benchmark.py --mode latency
-
-# Measure half output paths (requires input dtype to match)
-python benchmark.py --output-dtype float16
-python benchmark.py --output-dtype bfloat16
 
 # Summarize and plot
 python scripts/summarize_benchmarks.py --in results.jsonl
@@ -75,23 +89,40 @@ python scripts/plot_benchmark_speedup.py --summary summary_by_C.csv
 
 ### Results (Apple M4 Pro)
 
-Auto-dispatch benchmark (speedup = reference / Metal, >1 is faster):
+Speedup = reference / Metal (higher is faster), reported as median (p10-p90):
 
 - Chip: Apple M4 Pro, macOS 15.6.1, MLX 0.30.0, device gpu
 - Sweep: B={1,8,32}, n={4,8,16,32}, C={256,512,1024,2048,4096}, dtype=bfloat16,float16,float32
-- Settings: iters=200, warmup=10, repeats=3, queue_guard=50, dispatch_policy=auto, hybrid_latency=off, hybrid_min_C=8192, latency_avoid_fused_n32_max_C=2048, latency_avoid_fused_B1_min_n=16, throughput_allow_fused_n32_min_B=8, throughput_allow_fused_n32_min_C=4096, throughput_allow_fused_n32_small_C=512, fused_backward=off (forced), with_backward=on, output_dtype=none
+- Settings: iters=200, warmup=10, repeats=3, queue_guard=50, dispatch_policy=auto, hybrid_latency=off, output_dtype=none
 - Backward compiled: on
-- Guardrails are inactive in auto; latency/throughput guardrails apply only when `dispatch_policy` is set explicitly.
-- Results from `results_gauntlet_latest_with_backward.jsonl`.
 
-End-to-end MHCLayer (auto-dispatch, median speedup with p10-p90):
+Overall summary (median [p10-p90]):
 
-| Mode              | Forward | Backward |
-|-------------------|---------|----------|
-| Throughput (auto) | 10.15x (3.09-11.48) | 11.87x (3.54-12.92) |
-| Latency (auto)    | 3.42x (1.89-4.49) | 3.39x (2.33-5.07) |
+| Benchmark      | Throughput | Latency |
+|---------------|------------|---------|
+| sinkhorn      | 19.16x (9.05-25.18) | 3.81x (2.14-5.01) |
+| fused         | 1.83x (1.61-5.18) | 1.48x (1.24-4.42) |
+| layer         | 10.58x (5.39-11.80) | 3.82x (2.58-4.44) |
+| layer_backward| 11.93x (4.63-13.37) | 3.81x (2.60-4.95) |
 
-![Speedup by C](benchmark_speedup_by_C.png)
+Layer speedup by n (median [p10-p90]):
+
+| n  | Throughput forward | Throughput backward | Latency forward | Latency backward |
+|----|--------------------|---------------------|----------------|-----------------|
+| 4  | 10.86x (9.89-11.61) | 12.71x (12.00-13.56) | 4.32x (3.99-4.58) | 4.60x (4.06-5.39) |
+| 8  | 11.25x (10.01-12.14) | 12.88x (7.75-13.64) | 4.00x (3.74-4.30) | 4.22x (3.60-4.85) |
+| 16 | 10.66x (5.61-11.76) | 10.42x (4.65-12.44) | 3.37x (3.14-3.88) | 3.55x (3.26-3.87) |
+| 32 | 5.68x (4.90-8.81) | 5.06x (4.46-6.75) | 2.69x (2.36-4.30) | 2.70x (2.10-3.80) |
+
+Layer speedup by dtype (median [p10-p90]):
+
+| dtype    | Throughput forward | Throughput backward | Latency forward | Latency backward |
+|----------|--------------------|---------------------|----------------|-----------------|
+| float16  | 10.80x (5.43-11.97) | 12.02x (4.69-13.16) | 3.97x (2.58-4.55) | 3.72x (2.58-4.88) |
+| bfloat16 | 9.97x (5.49-11.35) | 11.77x (4.62-13.40) | 3.80x (2.63-4.33) | 3.79x (2.65-4.75) |
+| float32  | 10.79x (5.15-12.16) | 12.06x (4.68-13.37) | 3.78x (2.59-4.39) | 3.86x (2.65-5.29) |
+
+![Speedup by C](./benchmark_speedup_by_C.png)
 
 ## Semantics
 
@@ -108,16 +139,12 @@ x_mixed[b, i, c] = sum_j M[i, j] * x_expanded[b, j, c]
 out = x_mixed + y_dist
 ```
 
-## Dispatch Notes
+## Kernel cache keying
 
-- Auto-dispatch uses fused Metal for all shapes; guardrails are enabled only with `dispatch_policy=latency` or `dispatch_policy=throughput`.
-- In latency policy, fused Metal is avoided for n == 32 with `C <= latency_avoid_fused_n32_max_C` or B == 1 with `n >= latency_avoid_fused_B1_min_n`, routing to the compiled reference fallback (or hybrid when enabled and eligible).
-- In throughput policy, fused Metal for n == 32 is only allowed when `B >= throughput_allow_fused_n32_min_B` and (`C == throughput_allow_fused_n32_small_C` or `C >= throughput_allow_fused_n32_min_C`).
-- Use `--metal-dispatch force` to always use fused Metal.
-- Backward uses Metal kernels (no reference VJPs). The fused backward kernel is disabled; token-parallel prep + dx is always used.
-- MHCLayer defaults to identity-friendly initialization under exp-parameterization (off-diagonal logits ~ -12). Pass identity_init=False for zero-init logits.
-- Metal kernels default to n <= 64 (see `_MAX_N_ALLOWED` in `mhc_mlx/metal.py`). Raise the limit and rerun tests if needed.
-- The first run includes Metal JIT compilation overhead.
+Metal kernel names include a hash of the rendered source plus a per-machine cache key:
+
+- Set `MHC_MLX_KERNEL_CACHE_KEY` to override the cache key.
+- Set `MHC_MLX_KERNEL_CACHE_INCLUDE_DEVICE=0` to omit the GPU name from the key.
 
 ## Paper
 

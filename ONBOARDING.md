@@ -40,26 +40,26 @@ out = x_mixed + y_dist
   - stream_distribute
   - stream_mix_ref
 
-- `kernels/sinkhorn_knopp.metal`
+- `mhc_mlx/kernels/sinkhorn_knopp.metal`
   - Metal kernel body that projects exp(H_res_raw) onto the Birkhoff polytope
 
-- `kernels/sinkhorn_knopp_backward.metal`
+- `mhc_mlx/kernels/sinkhorn_knopp_backward.metal`
   - Metal kernel body for Sinkhorn-Knopp backward (dH_res from dM)
 
-- `kernels/mhc_fused.metal`
+- `mhc_mlx/kernels/mhc_fused.metal`
   - Metal kernel body that fuses:
     - stream aggregate + RMSNorm
     - stream mix: out[b,i,c] = sum_j M[i,j] * x[b,j,c]
     - add: out += H_post_act[i] * y_norm[b,c]
   - Includes an unrolled fast path for n=4
 
-- `kernels/stream_mix_add.metal`
+- `mhc_mlx/kernels/stream_mix_add.metal`
   - Metal kernel body that fuses stream mix + add(y_dist) for optional hybrid experiments
 
-- `kernels/mhc_backward_*.metal`
+- `mhc_mlx/kernels/mhc_backward_*.metal`
   - Metal kernel bodies for backward (prep, dx, fused_dx, dM, dH_pre, dH_post, dH_pre_post, d_rms_weight)
 
-- `kernels/stream_mix_backward_dx.metal`
+- `mhc_mlx/kernels/stream_mix_backward_dx.metal`
   - Metal kernel body for stream-mix backward (dx)
 
 - `mhc_mlx/metal.py`
@@ -70,8 +70,11 @@ out = x_mixed + y_dist
     - reference path (use_metal=False)
     - metal path (use_metal=True)
 
-- `test_correctness.py`
-  - Runs reference vs Metal checks and prints max error
+- `tests/test_correctness.py`
+  - Pytest suite for forward/backward correctness checks
+
+- `run_correctness.py`
+  - Convenience runner for the correctness suite (pytest required)
 
 - `benchmark.py`
   - Benchmark suite with correctness checks and JSONL output
@@ -85,7 +88,7 @@ Using uv:
 ```
 uv venv .venv
 source .venv/bin/activate
-uv pip install -e .
+uv pip install -e ".[dev]"
 ```
 
 Using pip:
@@ -93,23 +96,23 @@ Using pip:
 ```
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install -e ".[dev]"
 ```
 
 ## Correctness Workflow
 
 1. Start with reference only
-   - Run `python test_correctness.py` with use_metal=False inside the script.
+   - Run `python -m pytest -m "not stress"` and set `use_metal=False` in your quick repros.
    - Confirm shapes and dtypes match what you expect.
 
 2. Turn on Metal
-   - Run `python test_correctness.py` with use_metal=True.
-   - If it fails, reduce the test to the smallest case:
+   - Run `python run_correctness.py` to warm Metal JIT and compare.
+   - If it fails, reduce the repro to the smallest case:
      - B=1, n=4, C=8
      - random but deterministic inputs (seeded)
 
 3. Lock in regression
-   - Whenever you fix a bug, add a small regression case to test_correctness.py.
+   - Whenever you fix a bug, add a small regression case to `tests/test_correctness.py`.
 
 ## Performance Workflow
 

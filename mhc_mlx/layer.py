@@ -39,6 +39,17 @@ from .reference import (
 )
 
 
+def _dtype_eq(a, b) -> bool:
+    if a is b:
+        return True
+    if a is None or b is None:
+        return False
+    try:
+        return a == b
+    except TypeError:
+        return str(a) == str(b)
+
+
 class MHCLayer(nn.Module):
     def __init__(
         self,
@@ -278,8 +289,8 @@ class MHCLayer(nn.Module):
             raise ValueError(f"x_expanded C={C} does not match layer C={self.C}")
 
         output_dtype = None
-        if return_dtype is not None and return_dtype == x_expanded.dtype:
-            if return_dtype == mx.float16 or return_dtype == mx.bfloat16:
+        if return_dtype is not None and _dtype_eq(return_dtype, x_expanded.dtype):
+            if _dtype_eq(return_dtype, mx.float16) or _dtype_eq(return_dtype, mx.bfloat16):
                 output_dtype = return_dtype
 
         if self._should_use_reference_fallback(B, n, C):
@@ -332,6 +343,6 @@ class MHCLayer(nn.Module):
                 self.rms_weight,
             )
 
-        if return_dtype is not None and out.dtype != return_dtype:
+        if return_dtype is not None and not _dtype_eq(out.dtype, return_dtype):
             out = out.astype(return_dtype)
         return out
