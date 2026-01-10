@@ -6,3 +6,5 @@ results*.jsonl
 summary_*.csv
 benchmark_speedup_*.png
 benchmark_speedup_*.svg
+!benchmark_speedup_by_C.png
+!benchmark_speedup_by_C.svg
