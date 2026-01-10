@@ -2,7 +2,7 @@
 
 **High-performance MLX implementation of Manifold-Constrained Hyper-Connections (mHC)** for Apple Silicon.
 
-This library provides a drop-in `MHCLayer` that fuses multiple operations into optimized Metal kernels, achieving **>1.5x speedup** over standard implementations for low-latency inference.
+This library provides a drop-in `MHCLayer` that fuses multiple operations into optimized Metal kernels, achieving significant speedups over standard implementations.
 
 ## Installation
 
@@ -40,6 +40,10 @@ from mlx_mhc import MHCLayer
 
 We benchmarked on an Apple M4 Pro (macOS 15.6). `mhc-mlx` automatically selects the best kernel strategy based on workload size.
 
+### Latency Floor ($B=1$, Sequence Length=32)
+
+Optimized for ultra-low latency response times.
+
 | Channels (C) | Kernel Strategy | Speedup vs Compiled MLX |
 |---|---|---|
 | 256 | Fully Fused | **2.27x** |
@@ -48,17 +52,27 @@ We benchmarked on an Apple M4 Pro (macOS 15.6). `mhc-mlx` automatically selects 
 | 4096 | Column Parallel | **1.41x** |
 | 8192 | Column Parallel | **2.18x** |
 
-*(Benchmarks run with Batch Size=1, Sequence Length=32, bfloat16)*
+### High Throughput ($B=32$, Sequence Length=32)
+
+Optimized for maximum data processing rate.
+
+| Channels (C) | Kernel Strategy | Speedup vs Compiled MLX |
+|---|---|---|
+| 2048 | Column Parallel | **13.19x** |
+| 8192 | Column Parallel | **12.36x** |
+
+*(Benchmarks run with bfloat16)*
 
 To reproduce:
 ```bash
 mhc-mlx-bench --mode latency
+mhc-mlx-bench --mode throughput --B 32
 ```
 
 ## Key Optimizations
 
-- **Fully Fused Kernel:** Single kernel for Aggregate + RMS + Mix + Add. Ideal for $C \le 2048$.
-- **Column-Parallel Mixing:** Vectorized kernel maximizing throughput for $C > 2048$.
+- **Fully Fused Kernel:** Single kernel for Aggregate + RMS + Mix + Add. Ideal for $B \times C \le 2048$.
+- **Column-Parallel Mixing:** Vectorized kernel maximizing throughput for larger workloads.
 - **Adaptive Dispatch:** Runtime heuristic selects the fastest kernel.
 - **Super-Fused Backward:** Fused gradients for maximum training efficiency.
 
@@ -73,6 +87,10 @@ mhc-mlx-info
 
 **"No module named mhc_mlx"**
 Ensure you installed the package `mhc-mlx` (dash), not `mlx-mhc` (which is a different package).
+
+## Development & Publishing
+
+**Workflow Name:** For PyPI Trusted Publishing, the workflow filename is `publish.yml`.
 
 ## License
 
