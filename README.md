@@ -47,6 +47,10 @@ python benchmark.py --mode throughput --dispatch-policy throughput
 # Optional: reduce sync overhead variance for latency mode
 MLX_METAL_FAST_SYNCH=1 python benchmark.py --mode latency
 
+# Measure half output paths (requires input dtype to match)
+python benchmark.py --output-dtype float16
+python benchmark.py --output-dtype bfloat16
+
 # Summarize and plot
 python scripts/summarize_benchmarks.py --in results.jsonl
 python scripts/plot_benchmark_speedup.py --summary summary_by_C.csv
@@ -58,7 +62,7 @@ Auto-dispatch benchmark (speedup = reference / Metal, >1 is faster):
 
 - Chip: Apple M4 Pro, macOS 15.6.1, MLX 0.30.0, device gpu
 - Sweep: B={1,8,32}, n={4,8,16,32}, C={256,512,1024,2048,4096}, dtype=bfloat16,float16,float32
-- Settings: iters=200, warmup=10, repeats=3, queue_guard=50, dispatch_policy=auto, hybrid_latency=off, hybrid_min_C=8192, latency_avoid_fused_n32_max_C=2048, latency_avoid_fused_B1_min_n=16, throughput_allow_fused_n32_min_B=8, throughput_allow_fused_n32_min_C=4096, throughput_allow_fused_n32_small_C=512, fused_backward=off (forced), with_backward=on
+- Settings: iters=200, warmup=10, repeats=3, queue_guard=50, dispatch_policy=auto, hybrid_latency=off, hybrid_min_C=8192, latency_avoid_fused_n32_max_C=2048, latency_avoid_fused_B1_min_n=16, throughput_allow_fused_n32_min_B=8, throughput_allow_fused_n32_min_C=4096, throughput_allow_fused_n32_small_C=512, fused_backward=off (forced), with_backward=on, output_dtype=none
 - Backward compiled: on
 - Guardrails are inactive in auto; latency/throughput guardrails apply only when `dispatch_policy` is set explicitly.
 - Results are hardware-specific; rerun on your machine for final numbers.

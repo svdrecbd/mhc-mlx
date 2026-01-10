@@ -58,9 +58,16 @@ if (has_second) {
     float2 acc = float2(0.0f);
     for (int j = 0; j < n; ++j) {
         uint idx = base + uint(j) * uint(C) + c2;
-        const device packed_ushort2* x_ptr = (const device packed_ushort2*)(x_bits + idx);
-        ushort2 xv = ushort2(*x_ptr);
-        float2 xf = float2(BF16_TO_FLOAT(xv.x), BF16_TO_FLOAT(xv.y));
+        float2 xf = float2(0.0f);
+        if (((idx & 1u) == 0u) && has_second) {
+            const device packed_ushort2* x_ptr = (const device packed_ushort2*)(x_bits + idx);
+            ushort2 xv = ushort2(*x_ptr);
+            xf = float2(BF16_TO_FLOAT(xv.x), BF16_TO_FLOAT(xv.y));
+        } else {
+            float x0 = BF16_TO_FLOAT(x_bits[idx]);
+            float x1 = has_second ? BF16_TO_FLOAT(x_bits[idx + 1u]) : 0.0f;
+            xf = float2(x0, x1);
+        }
         acc += Ms[i * n + j] * xf;
     }
 

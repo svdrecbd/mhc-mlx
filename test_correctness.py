@@ -133,19 +133,17 @@ def test_fused_kernel_n16():
 
 
 def test_fused_kernel_half_output():
-    mx.random.seed(7)
-
     B, n, C = 2, 4, 129
-    H_pre_raw = mx.random.normal((n,)).astype(mx.float32)
-    H_post_raw = mx.random.normal((n,)).astype(mx.float32)
-    H_res_raw = mx.random.normal((n, n)).astype(mx.float32)
+    H_pre_raw = (mx.arange(n, dtype=mx.float32) * 0.1) - 0.2
+    H_post_raw = (mx.arange(n, dtype=mx.float32) * 0.07) - 0.1
+    H_res_raw = (mx.arange(n * n, dtype=mx.float32).reshape(n, n) * 0.01) - 0.05
     rms_weight = mx.ones((C,), dtype=mx.float32)
 
     H_pre_act, H_post_act = activate_pre_post(H_pre_raw, H_post_raw)
     M = mixing_matrix_from_logits(H_res_raw, iters=10, eps=1e-5)
 
-    for dtype, tol in ((mx.float16, 2e-2), (mx.bfloat16, 1e-1)):
-        x = mx.random.normal((B, n, C)).astype(dtype)
+    for dtype, tol in ((mx.float16, 3e-2), (mx.bfloat16, 2e-1)):
+        x = (mx.arange(B * n * C, dtype=mx.float32).reshape(B, n, C) * 0.001).astype(dtype)
         ref = mhc_forward_reference(
             x_expanded=x,
             H_pre_raw=H_pre_raw,

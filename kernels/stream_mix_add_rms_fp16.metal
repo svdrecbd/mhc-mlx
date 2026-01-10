@@ -52,9 +52,16 @@ if (has_second) {
     float2 acc = float2(0.0f);
     for (int j = 0; j < n; ++j) {
         uint idx = base + uint(j) * uint(C) + c2;
-        const device packed_half2* x_ptr = (const device packed_half2*)(x + idx);
-        half2 xv = half2(*x_ptr);
-        float2 xf = float2(float(xv.x), float(xv.y));
+        float2 xf = float2(0.0f);
+        if (((idx & 1u) == 0u) && has_second) {
+            const device packed_half2* x_ptr = (const device packed_half2*)(x + idx);
+            half2 xv = half2(*x_ptr);
+            xf = float2(float(xv.x), float(xv.y));
+        } else {
+            float x0 = float(x[idx]);
+            float x1 = has_second ? float(x[idx + 1u]) : 0.0f;
+            xf = float2(x0, x1);
+        }
         acc += Ms[i * n + j] * xf;
     }
 

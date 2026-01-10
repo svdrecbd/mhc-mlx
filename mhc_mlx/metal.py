@@ -18,10 +18,14 @@ _STREAM_MIX_ADD_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add.metal")
 _STREAM_MIX_ADD_RMS_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms.metal")
 _STREAM_MIX_ADD_RMS_FP16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_fp16.metal")
 _STREAM_MIX_ADD_RMS_BF16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_bf16.metal")
+_STREAM_MIX_ADD_RMS_TILE_F32_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_tile_f32.metal")
+_STREAM_MIX_ADD_RMS_TILE_FP16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_tile_fp16.metal")
+_STREAM_MIX_ADD_RMS_TILE_BF16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_tile_bf16.metal")
 _SINKHORN_PATH = os.path.join(_KERNEL_DIR, "sinkhorn_knopp.metal")
 _SINKHORN_BACKWARD_PATH = os.path.join(_KERNEL_DIR, "sinkhorn_knopp_backward.metal")
 _MHC_FUSED_PATH = os.path.join(_KERNEL_DIR, "mhc_fused.metal")
 _MHC_FORWARD_AGG_PATH = os.path.join(_KERNEL_DIR, "mhc_forward_agg.metal")
+_MHC_FORWARD_AGG_BF16_PATH = os.path.join(_KERNEL_DIR, "mhc_forward_agg_bf16.metal")
 _MHC_FORWARD_RMS_REDUCE_PATH = os.path.join(_KERNEL_DIR, "mhc_forward_rms_reduce.metal")
 _MHC_BACKWARD_PREP_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_prep.metal")
 _MHC_BACKWARD_PREP_TILE_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_prep_tile.metal")
@@ -154,6 +158,66 @@ def _stream_mix_add_rms_bf16_source(max_n: int) -> str:
     )
 
 
+@lru_cache(maxsize=8)
+def _stream_mix_add_rms_tile_f32_kernel(tile_n: int, tile_c: int) -> object:
+    source = _stream_mix_add_rms_tile_f32_source(tile_n, tile_c)
+    return mx.fast.metal_kernel(
+        name="stream_mix_add_rms_tile_f32",
+        input_names=["x", "M", "H_post", "y_agg", "inv_rms", "rms_weight"],
+        output_names=["out"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _stream_mix_add_rms_tile_f32_source(tile_n: int, tile_c: int) -> str:
+    return _render_source(
+        _STREAM_MIX_ADD_RMS_TILE_F32_PATH,
+        TILE_N=str(int(tile_n)),
+        TILE_C=str(int(tile_c)),
+    )
+
+
+@lru_cache(maxsize=8)
+def _stream_mix_add_rms_tile_fp16_kernel(tile_n: int, tile_c: int) -> object:
+    source = _stream_mix_add_rms_tile_fp16_source(tile_n, tile_c)
+    return mx.fast.metal_kernel(
+        name="stream_mix_add_rms_tile_fp16",
+        input_names=["x", "M", "H_post", "y_agg", "inv_rms", "rms_weight"],
+        output_names=["out"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _stream_mix_add_rms_tile_fp16_source(tile_n: int, tile_c: int) -> str:
+    return _render_source(
+        _STREAM_MIX_ADD_RMS_TILE_FP16_PATH,
+        TILE_N=str(int(tile_n)),
+        TILE_C=str(int(tile_c)),
+    )
+
+
+@lru_cache(maxsize=8)
+def _stream_mix_add_rms_tile_bf16_kernel(tile_n: int, tile_c: int) -> object:
+    source = _stream_mix_add_rms_tile_bf16_source(tile_n, tile_c)
+    return mx.fast.metal_kernel(
+        name="stream_mix_add_rms_tile_bf16",
+        input_names=["x", "M", "H_post", "y_agg", "inv_rms", "rms_weight"],
+        output_names=["out"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _stream_mix_add_rms_tile_bf16_source(tile_n: int, tile_c: int) -> str:
+    return _render_source(
+        _STREAM_MIX_ADD_RMS_TILE_BF16_PATH,
+        TILE_N=str(int(tile_n)),
+        TILE_C=str(int(tile_c)),
+    )
+
+
 @lru_cache(maxsize=32)
 def _sinkhorn_kernel(max_n: int, iters: int, eps: float) -> object:
     source = _sinkhorn_source(max_n, iters, eps)
@@ -212,6 +276,26 @@ def _mhc_forward_agg_kernel(max_n: int) -> object:
 def _mhc_forward_agg_source(max_n: int) -> str:
     return _render_source(
         _MHC_FORWARD_AGG_PATH,
+        MAX_N=str(int(max_n)),
+        MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
+    )
+
+
+@lru_cache(maxsize=16)
+def _mhc_forward_agg_bf16_kernel(max_n: int) -> object:
+    source = _mhc_forward_agg_bf16_source(max_n)
+    return mx.fast.metal_kernel(
+        name="mhc_forward_agg_bf16",
+        input_names=["x", "H_pre"],
+        output_names=["y_agg", "partial_sq"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _mhc_forward_agg_bf16_source(max_n: int) -> str:
+    return _render_source(
+        _MHC_FORWARD_AGG_BF16_PATH,
         MAX_N=str(int(max_n)),
         MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
     )
@@ -529,6 +613,33 @@ def _output_dtype_from_key(key: str) -> mx.Dtype | None:
     raise ValueError(f"unsupported output_dtype key: {key}")
 
 
+def _mix_add_rms_tile_config(
+    n: int, output_dtype: mx.Dtype | None
+) -> tuple[int, int, int, int] | None:
+    if n not in (16, 32):
+        return None
+    if output_dtype is not None and (output_dtype == mx.float16 or output_dtype == mx.bfloat16):
+        tile_c = 8 if n == 16 else 4
+        vec = 2
+    else:
+        tile_c = 8 if n == 16 else 4
+        vec = 1
+    tpg = int(n * tile_c)
+    tile_channels = int(tile_c * vec)
+    return tile_c, tile_channels, tpg, vec
+
+
+def mix_add_rms_threadgroup_size(
+    n: int, output_dtype: mx.Dtype | None, threads_per_group: int
+) -> int:
+    output_dtype = _normalize_output_dtype(output_dtype)
+    tile_cfg = _mix_add_rms_tile_config(n, output_dtype)
+    if tile_cfg is None:
+        return int(threads_per_group)
+    _, _, tpg, _ = tile_cfg
+    return int(tpg)
+
+
 def suggest_threads_per_group(C: int, max_tpg: int = _MAX_TPG_ALLOWED) -> int:
     """Heuristic threadgroup size based on channel count."""
     if C <= 0:
@@ -644,12 +755,38 @@ def stream_mix_add_rms_metal(
     max_n = _validate_n(n)
     if threads_per_group <= 0:
         raise ValueError("threads_per_group must be positive")
-    if threads_per_group > _MAX_TPG_ALLOWED:
-        raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED}")
 
     output_dtype = _normalize_output_dtype(output_dtype)
+    tile_cfg = _mix_add_rms_tile_config(n, output_dtype)
+    if tile_cfg is None:
+        effective_tpg = int(threads_per_group)
+    else:
+        _, _, effective_tpg, _ = tile_cfg
+    if effective_tpg > _MAX_TPG_ALLOWED:
+        raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED}")
+
     if verbose:
-        if output_dtype == mx.float16:
+        if tile_cfg is not None:
+            tile_c, _, _, _ = tile_cfg
+            if output_dtype == mx.float16:
+                _maybe_print_source(
+                    _stream_mix_add_rms_tile_fp16_source(n, tile_c),
+                    "stream_mix_add_rms_tile_fp16",
+                    True,
+                )
+            elif output_dtype == mx.bfloat16:
+                _maybe_print_source(
+                    _stream_mix_add_rms_tile_bf16_source(n, tile_c),
+                    "stream_mix_add_rms_tile_bf16",
+                    True,
+                )
+            else:
+                _maybe_print_source(
+                    _stream_mix_add_rms_tile_f32_source(n, tile_c),
+                    "stream_mix_add_rms_tile_f32",
+                    True,
+                )
+        elif output_dtype == mx.float16:
             _maybe_print_source(_stream_mix_add_rms_fp16_source(max_n), "stream_mix_add_rms_fp16", True)
         elif output_dtype == mx.bfloat16:
             _maybe_print_source(_stream_mix_add_rms_bf16_source(max_n), "stream_mix_add_rms_bf16", True)
@@ -657,22 +794,40 @@ def stream_mix_add_rms_metal(
             _maybe_print_source(_stream_mix_add_rms_source(max_n), "stream_mix_add_rms", True)
     if output_dtype is None or output_dtype == mx.float32:
         x_in = _maybe_cast_float32(x)
-        kernel = _stream_mix_add_rms_kernel(max_n)
-        grid_x = C
+        if tile_cfg is None:
+            kernel = _stream_mix_add_rms_kernel(max_n)
+            grid_x = C
+            tpg = effective_tpg
+        else:
+            tile_c, tile_channels, tpg, _ = tile_cfg
+            kernel = _stream_mix_add_rms_tile_f32_kernel(n, tile_c)
+            grid_x = _ceil_div(C, tile_channels) * tpg
         out_dtype = mx.float32
     elif output_dtype == mx.float16:
         if x.dtype != mx.float16:
             raise ValueError("x must be float16 when output_dtype is float16")
         x_in = x
-        kernel = _stream_mix_add_rms_fp16_kernel(max_n)
-        grid_x = _ceil_div(C, 2)
+        if tile_cfg is None:
+            kernel = _stream_mix_add_rms_fp16_kernel(max_n)
+            grid_x = _ceil_div(C, 2)
+            tpg = effective_tpg
+        else:
+            tile_c, tile_channels, tpg, _ = tile_cfg
+            kernel = _stream_mix_add_rms_tile_fp16_kernel(n, tile_c)
+            grid_x = _ceil_div(C, tile_channels) * tpg
         out_dtype = mx.float16
     elif output_dtype == mx.bfloat16:
         if x.dtype != mx.bfloat16:
             raise ValueError("x must be bfloat16 when output_dtype is bfloat16")
         x_in = x
-        kernel = _stream_mix_add_rms_bf16_kernel(max_n)
-        grid_x = _ceil_div(C, 2)
+        if tile_cfg is None:
+            kernel = _stream_mix_add_rms_bf16_kernel(max_n)
+            grid_x = _ceil_div(C, 2)
+            tpg = effective_tpg
+        else:
+            tile_c, tile_channels, tpg, _ = tile_cfg
+            kernel = _stream_mix_add_rms_tile_bf16_kernel(n, tile_c)
+            grid_x = _ceil_div(C, tile_channels) * tpg
         out_dtype = mx.bfloat16
     else:
         raise ValueError(f"unsupported output_dtype: {output_dtype}")
@@ -686,7 +841,7 @@ def stream_mix_add_rms_metal(
     out = kernel(
         inputs=[x_in, M_f, H_post_f, y_agg_f, inv_rms_f, rms_weight_f],
         grid=(grid_x, B * n, 1),
-        threadgroup=(threads_per_group, 1, 1),
+        threadgroup=(tpg, 1, 1),
         output_shapes=[x_in.shape],
         output_dtypes=[out_dtype],
     )[0]
@@ -770,14 +925,22 @@ def mhc_forward_agg_metal(
     if threads_per_group > _MAX_TPG_ALLOWED:
         raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED}")
 
-    if verbose:
-        _maybe_print_source(_mhc_forward_agg_source(max_n), "mhc_forward_agg", verbose=True)
+    x_in: mx.array
+    kernel: object
+    if x.dtype == mx.bfloat16:
+        if verbose:
+            _maybe_print_source(_mhc_forward_agg_bf16_source(max_n), "mhc_forward_agg_bf16", True)
+        x_in = x
+        kernel = _mhc_forward_agg_bf16_kernel(max_n)
+    else:
+        if verbose:
+            _maybe_print_source(_mhc_forward_agg_source(max_n), "mhc_forward_agg", True)
+        x_in = _maybe_cast_float32(x)
+        kernel = _mhc_forward_agg_kernel(max_n)
 
-    x_in = _maybe_cast_float32(x)
     H_pre_f = H_pre.astype(mx.float32)
 
     tiles = _ceil_div(C, threads_per_group)
-    kernel = _mhc_forward_agg_kernel(max_n)
     y_agg, partial_sq = kernel(
         inputs=[x_in, H_pre_f],
         grid=(C, B, 1),

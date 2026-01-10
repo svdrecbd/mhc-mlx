@@ -13,6 +13,7 @@ from mhc_mlx.layer import MHCLayer
 from mhc_mlx.metal import (
     mhc_forward_fused_metal,
     mhc_forward_fused_metal_autograd,
+    mix_add_rms_threadgroup_size,
     sinkhorn_knopp_metal,
     sinkhorn_knopp_metal_autograd,
     suggest_threads_per_group,
@@ -182,6 +183,16 @@ def _parse_dtype_list(value: str) -> list[mx.Dtype]:
     return dtypes
 
 
+def _parse_output_dtype(value: str) -> mx.Dtype | None:
+    value = value.strip().lower()
+    if value in {"", "none", "null"}:
+        return None
+    dtypes = _parse_dtype_list(value)
+    if len(dtypes) != 1:
+        raise ValueError("output dtype must be a single dtype")
+    return dtypes[0]
+
+
 def _parse_mode_list(value: str) -> list[str]:
     parts = [p.strip().lower() for p in value.split(",") if p.strip()]
     if not parts:
@@ -309,6 +320,8 @@ def _run_case(
     tpg = args.threads_per_group
     if tpg is None:
         tpg = suggest_threads_per_group(C)
+    output_dtype = args.output_dtype
+    mix_tpg = mix_add_rms_threadgroup_size(n, output_dtype, tpg)
 
     dispatch_policy_effective = args.dispatch_policy
 
@@ -403,7 +416,9 @@ def _run_case(
         "repeats": args.repeats,
         "queue_guard": args.queue_guard,
         "threads_per_group": tpg,
+        "mix_threads_per_group": mix_tpg,
         "seed": args.seed + case_id,
+        "output_dtype": _dtype_name(output_dtype) if output_dtype is not None else "none",
         "dispatch_path": dispatch_path,
         "dispatch_policy_effective": dispatch_policy_effective,
         "hybrid_min_C": args.hybrid_min_C,
@@ -418,8 +433,8 @@ def _run_case(
     }
 
     if not args.no_correctness:
-        y_ref = ref(x)
-        y_metal = metal(x)
+        y_ref = ref(x, return_dtype=output_dtype)
+        y_metal = metal(x, return_dtype=output_dtype)
         mx.eval(y_ref)
         mx.eval(y_metal)
         mx.synchronize()
@@ -486,8 +501,14 @@ def _run_case(
     )
 
     # Fused forward only (precomputed M and activations)
+    def _fused_ref(_x):
+        out = mhc_forward_fused_reference(_x, M, H_pre_act, H_post_act, rms_weight, args.eps)
+        if output_dtype is not None and out.dtype != output_dtype:
+            out = out.astype(output_dtype)
+        return out
+
     fused_ref_times = bench_repeat(
-        lambda _x: mhc_forward_fused_reference(_x, M, H_pre_act, H_post_act, rms_weight, args.eps),
+        _fused_ref,
         x,
         iters=args.iters,
         warmup=args.warmup,
@@ -514,6 +535,7 @@ def _run_case(
             rms_weight,
             eps=args.eps,
             threads_per_group=tpg,
+            output_dtype=output_dtype,
             verbose=False,
         ),
         x,
@@ -535,7 +557,7 @@ def _run_case(
 
     # End-to-end layer
     layer_ref_times = bench_repeat(
-        ref,
+        lambda _x: ref(_x, return_dtype=output_dtype),
         x,
         iters=args.iters,
         warmup=args.warmup,
@@ -554,7 +576,7 @@ def _run_case(
     )
 
     layer_metal_times = bench_repeat(
-        metal,
+        lambda _x: metal(_x, return_dtype=output_dtype),
         x,
         iters=args.iters,
         warmup=args.warmup,
@@ -581,17 +603,19 @@ def _run_case(
                 args._warned_backward_compile = True
             backward_compiled = False
 
-        def ref_loss(x, H_pre_raw, H_post_raw, H_res_raw, rms_weight):
-            out = mhc_forward_reference(
-                x_expanded=x,
-                H_pre_raw=H_pre_raw,
-                H_post_raw=H_post_raw,
-                H_res_raw=H_res_raw,
-                rms_weight=rms_weight,
-                sinkhorn_iters=args.sinkhorn_iters,
-                eps=args.eps,
-            )
-            return mx.sum(out)
+    def ref_loss(x, H_pre_raw, H_post_raw, H_res_raw, rms_weight):
+        out = mhc_forward_reference(
+            x_expanded=x,
+            H_pre_raw=H_pre_raw,
+            H_post_raw=H_post_raw,
+            H_res_raw=H_res_raw,
+            rms_weight=rms_weight,
+            sinkhorn_iters=args.sinkhorn_iters,
+            eps=args.eps,
+        )
+        if output_dtype is not None and out.dtype != output_dtype:
+            out = out.astype(output_dtype)
+        return mx.sum(out)
 
         def metal_loss(x, H_pre_raw, H_post_raw, H_res_raw, rms_weight):
             if use_ref_fallback:
@@ -616,6 +640,8 @@ def _run_case(
                     threads_per_group=tpg,
                     verbose=False,
                 )
+                if output_dtype is not None and out.dtype != output_dtype:
+                    out = out.astype(output_dtype)
                 return mx.sum(out)
 
             M = sinkhorn_knopp_metal_autograd(
@@ -634,8 +660,11 @@ def _run_case(
                 eps=args.eps,
                 threads_per_group=tpg,
                 fused_backward=fused_backward_effective,
+                output_dtype=output_dtype,
                 verbose=False,
             )
+            if output_dtype is not None and out.dtype != output_dtype:
+                out = out.astype(output_dtype)
             return mx.sum(out)
 
         ref_back_times = bench_backward_repeat(
@@ -681,7 +710,8 @@ def _run_case(
     avoid_label = avoid_reason or "none"
     print(
         f"[{args.mode}] case {case_id}: B={B} n={n} C={C} dtype={_dtype_name(dtype)} "
-        f"tpg={tpg} path={dispatch_path} fused_bw={fused_backward_effective} "
+        f"tpg={tpg} mix_tpg={mix_tpg} out={_dtype_name(output_dtype) if output_dtype else 'none'} "
+        f"path={dispatch_path} fused_bw={fused_backward_effective} "
         f"policy={dispatch_policy_effective} avoid={avoid_label}"
     )
 
@@ -698,6 +728,12 @@ def main():
     parser.add_argument("--sinkhorn-iters", type=int, default=20)
     parser.add_argument("--eps", type=float, default=1e-5)
     parser.add_argument("--threads-per-group", type=int, default=None)
+    parser.add_argument(
+        "--output-dtype",
+        type=str,
+        default="none",
+        help="Optional output dtype for layer/fused outputs (none, float16, bfloat16, float32).",
+    )
     parser.add_argument("--metal-dispatch", type=str, choices=["auto", "force"], default="auto")
     parser.add_argument(
         "--dispatch-policy",
@@ -728,6 +764,7 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", type=str, default="results.jsonl")
     args = parser.parse_args()
+    args.output_dtype = _parse_output_dtype(args.output_dtype)
 
     device = _get_device()
     chip = _get_chip_name()

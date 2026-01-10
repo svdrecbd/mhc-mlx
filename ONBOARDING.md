@@ -127,6 +127,7 @@ To measure something meaningful:
 - Use `--metal-dispatch auto` to benchmark the default auto-dispatch behavior (fused by default, no guardrails).
 - Use `--dispatch-policy latency` to enable latency guardrails; use `--dispatch-policy throughput` to enable throughput guardrails.
 - Use `--with-backward` to time gradient computation.
+- Use `--output-dtype float16` or `--output-dtype bfloat16` to measure half-output paths (input dtype must match).
 
 Run:
 
