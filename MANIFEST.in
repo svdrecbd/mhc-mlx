@@ -1,2 +1,5 @@
-include README.md LICENSE
+include LICENSE
+include README.md
+include pyproject.toml
 recursive-include mhc_mlx/kernels *.metal
+include mlx_mhc/__init__.py

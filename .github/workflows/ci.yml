@@ -1,27 +1,45 @@
-name: ci
+name: CI
 
 on:
   push:
+    branches: [ main ]
   pull_request:
+    branches: [ main ]
 
 jobs:
-  tests-macos:
+  build-and-test:
     runs-on: macos-14
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
     steps:
-      - uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
 
-      - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+    - name: Install build tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install build twine pytest
 
-      - name: Run tests
-        env:
-          MHC_MLX_RUN_STRESS: "0"
-        run: |
-          python -m pytest -m "not stress"
+    - name: Build Wheel
+      run: python -m build
+
+    - name: Check metadata
+      run: twine check dist/*
+
+    - name: Install Wheel
+      run: pip install dist/*.whl
+
+    - name: Run Tests (Installed)
+      run: |
+        # Run from a different directory to ensure we test the installed package
+        cd tests
+        python -m pytest test_packaging.py
+        # Run correctness tests
+        cd ..
+        python -m pytest tests/test_correctness.py
