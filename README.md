@@ -11,6 +11,7 @@ mHC adds manifold-constrained residual mixing across multiple streams. This repo
 - **Column-Parallel Mixing:** A custom Metal kernel that loads input streams into registers once per column, reducing memory bandwidth usage by O(n). This provides a **~2.5x speedup** over naive fused implementations for $n=32$.
 - **Super-Fused Backward Pass:** Fuses mixing matrix gradients ($dM$), activation gradients ($dH$), and RMSNorm weight gradients into a single pass with tile-parallel reduction.
 - **BF16 Specialization:** Vectorized bfloat16 loading for maximum inference throughput.
+- **Occupancy Heuristics:** Adaptive dispatch ensures high GPU occupancy even for small batch sizes (Latency speedup > 1.0x).
 
 ## Installation
 
@@ -75,12 +76,19 @@ Overall summary (median [p10-p90]):
 
 | Benchmark      | Throughput | Latency |
 |---------------|------------|---------|
-| sinkhorn      | 20.92x (20.52-21.43) | 4.94x (4.39-5.35) |
-| **fused (Mix/Add)** | **4.61x (1.78-6.04)** | **2.02x (0.91-5.07)** |
-| layer (forward)| 9.89x (9.50-10.41) | 3.93x (3.61-4.56) |
-| layer_backward | 11.78x (7.78-12.87) | 4.77x (4.12-5.55) |
+| sinkhorn      | 20.93x (9.31-25.72) | 4.56x (2.16-5.16) |
+| fused (Mix/Add) | 1.80x (1.63-6.04) | 1.27x (0.91-2.49) |
+| layer (forward)| 10.41x (5.06-11.94) | 3.93x (2.12-4.78) |
+| layer_backward | 11.78x (4.95-12.90) | 4.78x (2.56-6.05) |
 
-*Note: "fused" speedup for $n=32$ is **4.61x**, up from **1.83x** in previous versions thanks to column-parallel loading.*
+*Note: "fused" throughput speedup peaks at **~6.0x** for $n=32$ thanks to column-parallel loading. Latency is consistently **>1.2x** due to occupancy heuristics.*
+
+Layer speedup by n (median [p10-p90]):
+
+| n  | Throughput forward | Throughput backward | Latency forward | Latency backward |
+|----|--------------------|---------------------|----------------|-----------------|
+| 4  | 10.88x (10.26-11.46) | 12.41x (10.91-12.86) | 4.49x (4.01-4.78) | 5.40x (4.31-6.05) |
+| 32 | 6.35x (5.38-9.07) | 6.00x (5.20-7.16) | 2.55x (2.20-4.17) | 2.59x (2.05-5.14) |
 
 ![Speedup by C](assets/benchmark_speedup_by_C.png)
 
