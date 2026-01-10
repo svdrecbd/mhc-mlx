@@ -132,6 +132,45 @@ def test_fused_kernel_n16():
     assert err < 1e-5
 
 
+def test_fused_kernel_half_output():
+    mx.random.seed(7)
+
+    B, n, C = 2, 4, 129
+    H_pre_raw = mx.random.normal((n,)).astype(mx.float32)
+    H_post_raw = mx.random.normal((n,)).astype(mx.float32)
+    H_res_raw = mx.random.normal((n, n)).astype(mx.float32)
+    rms_weight = mx.ones((C,), dtype=mx.float32)
+
+    H_pre_act, H_post_act = activate_pre_post(H_pre_raw, H_post_raw)
+    M = mixing_matrix_from_logits(H_res_raw, iters=10, eps=1e-5)
+
+    for dtype, tol in ((mx.float16, 2e-2), (mx.bfloat16, 1e-1)):
+        x = mx.random.normal((B, n, C)).astype(dtype)
+        ref = mhc_forward_reference(
+            x_expanded=x,
+            H_pre_raw=H_pre_raw,
+            H_post_raw=H_post_raw,
+            H_res_raw=H_res_raw,
+            rms_weight=rms_weight,
+            sinkhorn_iters=10,
+            eps=1e-5,
+        )
+        metal = mhc_forward_fused_metal(
+            x=x,
+            M=M,
+            H_pre=H_pre_act,
+            H_post=H_post_act,
+            rms_weight=rms_weight,
+            eps=1e-5,
+            threads_per_group=128,
+            output_dtype=dtype,
+            verbose=False,
+        )
+        err = max_abs(ref.astype(dtype).astype(mx.float32), metal.astype(mx.float32))
+        print(f"mhc_fused kernel half output ({dtype}) max abs error: {err:.6e}")
+        assert err < tol
+
+
 def test_identity_mapping_n4():
     mx.random.seed(123)
 
@@ -375,6 +414,9 @@ def main():
 
     print("\n--- Testing fused mhc kernel (n=16) ---")
     test_fused_kernel_n16()
+
+    print("\n--- Testing fused mhc kernel half output ---")
+    test_fused_kernel_half_output()
 
     print("\n--- Testing identity mapping (n=4) ---")
     test_identity_mapping_n4()

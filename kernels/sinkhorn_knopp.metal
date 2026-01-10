@@ -15,6 +15,7 @@ uint lane = thread_position_in_threadgroup.x;
 uint tpg = threads_per_threadgroup.x;
 
 int n = H_res_shape[0];
+bool use_lane_norm = (n <= 32) && (tpg >= uint(n));
 
 threadgroup float H[MAX_N * MAX_N];
 threadgroup float reduce_buf[MAX_TPG];
@@ -27,6 +28,35 @@ threadgroup_barrier(mem_flags::mem_threadgroup);
 
 // Sinkhorn-Knopp: alternate row/col normalization
 for (int it = 0; it < ITERS; ++it) {
+    if (use_lane_norm) {
+        if (lane < uint(n)) {
+            int r = int(lane);
+            float s = 0.0f;
+            for (int c = 0; c < n; ++c) {
+                s += H[r * n + c];
+            }
+            float scale = (s > EPS) ? (1.0f / s) : 1.0f;
+            for (int c = 0; c < n; ++c) {
+                H[r * n + c] *= scale;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (lane < uint(n)) {
+            int c = int(lane);
+            float s = 0.0f;
+            for (int r = 0; r < n; ++r) {
+                s += H[r * n + c];
+            }
+            float scale = (s > EPS) ? (1.0f / s) : 0.0f;
+            for (int r = 0; r < n; ++r) {
+                H[r * n + c] *= scale;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        continue;
+    }
+
     // Row norm
     for (int r = 0; r < n; ++r) {
         float partial = 0.0f;

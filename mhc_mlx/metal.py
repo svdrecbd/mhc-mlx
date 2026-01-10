@@ -15,10 +15,16 @@ import mlx.core as mx
 
 _KERNEL_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "kernels")
 _STREAM_MIX_ADD_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add.metal")
+_STREAM_MIX_ADD_RMS_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms.metal")
+_STREAM_MIX_ADD_RMS_FP16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_fp16.metal")
+_STREAM_MIX_ADD_RMS_BF16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_bf16.metal")
 _SINKHORN_PATH = os.path.join(_KERNEL_DIR, "sinkhorn_knopp.metal")
 _SINKHORN_BACKWARD_PATH = os.path.join(_KERNEL_DIR, "sinkhorn_knopp_backward.metal")
 _MHC_FUSED_PATH = os.path.join(_KERNEL_DIR, "mhc_fused.metal")
+_MHC_FORWARD_AGG_PATH = os.path.join(_KERNEL_DIR, "mhc_forward_agg.metal")
+_MHC_FORWARD_RMS_REDUCE_PATH = os.path.join(_KERNEL_DIR, "mhc_forward_rms_reduce.metal")
 _MHC_BACKWARD_PREP_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_prep.metal")
+_MHC_BACKWARD_PREP_TILE_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_prep_tile.metal")
 _MHC_BACKWARD_DX_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dx.metal")
 _MHC_BACKWARD_FUSED_DX_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_fused_dx.metal")
 _MHC_BACKWARD_DM_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dM.metal")
@@ -26,6 +32,7 @@ _MHC_BACKWARD_DH_PRE_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dH_pre.metal
 _MHC_BACKWARD_DH_POST_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dH_post.metal")
 _MHC_BACKWARD_DH_PRE_POST_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dH_pre_post.metal")
 _MHC_BACKWARD_DRMS_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_d_rms_weight.metal")
+_MHC_BACKWARD_RMS_REDUCE_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_rms_reduce.metal")
 _STREAM_MIX_BACKWARD_DX_PATH = os.path.join(_KERNEL_DIR, "stream_mix_backward_dx.metal")
 
 _MAX_N_ALLOWED = 64
@@ -90,6 +97,63 @@ def _stream_mix_add_source(max_n: int) -> str:
     )
 
 
+@lru_cache(maxsize=8)
+def _stream_mix_add_rms_kernel(max_n: int) -> object:
+    source = _stream_mix_add_rms_source(max_n)
+    return mx.fast.metal_kernel(
+        name="stream_mix_add_rms",
+        input_names=["x", "M", "H_post", "y_agg", "inv_rms", "rms_weight"],
+        output_names=["out"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _stream_mix_add_rms_source(max_n: int) -> str:
+    return _render_source(
+        _STREAM_MIX_ADD_RMS_PATH,
+        MAX_N=str(int(max_n)),
+    )
+
+
+@lru_cache(maxsize=8)
+def _stream_mix_add_rms_fp16_kernel(max_n: int) -> object:
+    source = _stream_mix_add_rms_fp16_source(max_n)
+    return mx.fast.metal_kernel(
+        name="stream_mix_add_rms_fp16",
+        input_names=["x", "M", "H_post", "y_agg", "inv_rms", "rms_weight"],
+        output_names=["out"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _stream_mix_add_rms_fp16_source(max_n: int) -> str:
+    return _render_source(
+        _STREAM_MIX_ADD_RMS_FP16_PATH,
+        MAX_N=str(int(max_n)),
+    )
+
+
+@lru_cache(maxsize=8)
+def _stream_mix_add_rms_bf16_kernel(max_n: int) -> object:
+    source = _stream_mix_add_rms_bf16_source(max_n)
+    return mx.fast.metal_kernel(
+        name="stream_mix_add_rms_bf16",
+        input_names=["x", "M", "H_post", "y_agg", "inv_rms", "rms_weight"],
+        output_names=["out"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _stream_mix_add_rms_bf16_source(max_n: int) -> str:
+    return _render_source(
+        _STREAM_MIX_ADD_RMS_BF16_PATH,
+        MAX_N=str(int(max_n)),
+    )
+
+
 @lru_cache(maxsize=32)
 def _sinkhorn_kernel(max_n: int, iters: int, eps: float) -> object:
     source = _sinkhorn_source(max_n, iters, eps)
@@ -133,6 +197,46 @@ def _mhc_fused_source(max_n: int, eps: float) -> str:
     )
 
 
+@lru_cache(maxsize=16)
+def _mhc_forward_agg_kernel(max_n: int) -> object:
+    source = _mhc_forward_agg_source(max_n)
+    return mx.fast.metal_kernel(
+        name="mhc_forward_agg",
+        input_names=["x", "H_pre"],
+        output_names=["y_agg", "partial_sq"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _mhc_forward_agg_source(max_n: int) -> str:
+    return _render_source(
+        _MHC_FORWARD_AGG_PATH,
+        MAX_N=str(int(max_n)),
+        MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
+    )
+
+
+@lru_cache(maxsize=16)
+def _mhc_forward_rms_reduce_kernel(eps: float) -> object:
+    source = _mhc_forward_rms_reduce_source(eps)
+    return mx.fast.metal_kernel(
+        name="mhc_forward_rms_reduce",
+        input_names=["y_agg", "partial_sq"],
+        output_names=["inv_rms"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _mhc_forward_rms_reduce_source(eps: float) -> str:
+    return _render_source(
+        _MHC_FORWARD_RMS_REDUCE_PATH,
+        MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
+        EPS=_format_float_literal(eps),
+    )
+
+
 @lru_cache(maxsize=32)
 def _sinkhorn_backward_kernel(max_n: int, iters: int, eps: float) -> object:
     source = _sinkhorn_backward_source(max_n, iters, eps)
@@ -171,6 +275,46 @@ def _mhc_backward_prep_source(max_n: int, eps: float) -> str:
     return _render_source(
         _MHC_BACKWARD_PREP_PATH,
         MAX_N=str(int(max_n)),
+        MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
+        EPS=_format_float_literal(eps),
+    )
+
+
+@lru_cache(maxsize=16)
+def _mhc_backward_prep_tile_kernel(max_n: int) -> object:
+    source = _mhc_backward_prep_tile_source(max_n)
+    return mx.fast.metal_kernel(
+        name="mhc_backward_prep_tile",
+        input_names=["x", "H_pre", "H_post", "rms_weight", "d_out"],
+        output_names=["y_agg", "d_y_norm", "partial_sq", "partial_dr"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _mhc_backward_prep_tile_source(max_n: int) -> str:
+    return _render_source(
+        _MHC_BACKWARD_PREP_TILE_PATH,
+        MAX_N=str(int(max_n)),
+        MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
+    )
+
+
+@lru_cache(maxsize=16)
+def _mhc_backward_rms_reduce_kernel(eps: float) -> object:
+    source = _mhc_backward_rms_reduce_source(eps)
+    return mx.fast.metal_kernel(
+        name="mhc_backward_rms_reduce",
+        input_names=["y_agg", "partial_sq", "partial_dr"],
+        output_names=["inv_rms", "d_r"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _mhc_backward_rms_reduce_source(eps: float) -> str:
+    return _render_source(
+        _MHC_BACKWARD_RMS_REDUCE_PATH,
         MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
         EPS=_format_float_literal(eps),
     )
@@ -347,6 +491,44 @@ def _validate_n(n: int) -> int:
     return int(n)
 
 
+def _ceil_div(a: int, b: int) -> int:
+    return (a + b - 1) // b
+
+
+def _maybe_cast_float32(x: mx.array) -> mx.array:
+    if x.dtype in (mx.float16, mx.float32):
+        return x
+    return x.astype(mx.float32)
+
+
+def _normalize_output_dtype(output_dtype: mx.Dtype | None) -> mx.Dtype | None:
+    if output_dtype is None:
+        return None
+    if output_dtype in (mx.float32, mx.float16, mx.bfloat16):
+        return output_dtype
+    raise ValueError(f"unsupported output_dtype: {output_dtype}")
+
+
+def _output_dtype_key(output_dtype: mx.Dtype | None) -> str:
+    if output_dtype is None or output_dtype == mx.float32:
+        return "float32"
+    if output_dtype == mx.float16:
+        return "float16"
+    if output_dtype == mx.bfloat16:
+        return "bfloat16"
+    raise ValueError(f"unsupported output_dtype: {output_dtype}")
+
+
+def _output_dtype_from_key(key: str) -> mx.Dtype | None:
+    if key == "float32":
+        return None
+    if key == "float16":
+        return mx.float16
+    if key == "bfloat16":
+        return mx.bfloat16
+    raise ValueError(f"unsupported output_dtype key: {key}")
+
+
 def suggest_threads_per_group(C: int, max_tpg: int = _MAX_TPG_ALLOWED) -> int:
     """Heuristic threadgroup size based on channel count."""
     if C <= 0:
@@ -398,8 +580,8 @@ def stream_mix_add_metal(
     if verbose:
         _maybe_print_source(_stream_mix_add_source(max_n), "stream_mix_add", verbose=True)
 
-    # Force float32 for the kernel.
-    x_f = x.astype(mx.float32)
+    x_in = _maybe_cast_float32(x)
+    d_out_in = _maybe_cast_float32(d_out)
     M_f = M.astype(mx.float32)
     y_f = y_dist.astype(mx.float32)
 
@@ -409,11 +591,104 @@ def stream_mix_add_metal(
     # - x dimension: channels C
     # - y dimension: B*n (each y index corresponds to one (b, i) pair)
     out = kernel(
-        inputs=[x_f, M_f, y_f],
+        inputs=[x_in, M_f, y_f],
         grid=(C, B * n, 1),
         threadgroup=(threads_per_group, 1, 1),
-        output_shapes=[x_f.shape],
+        output_shapes=[x_in.shape],
         output_dtypes=[mx.float32],
+    )[0]
+
+    return out
+
+
+def stream_mix_add_rms_metal(
+    x: mx.array,
+    M: mx.array,
+    H_post: mx.array,
+    y_agg: mx.array,
+    inv_rms: mx.array,
+    rms_weight: mx.array,
+    threads_per_group: int = 256,
+    output_dtype: mx.Dtype | None = None,
+    verbose: bool = False,
+) -> mx.array:
+    """Compute out = stream_mix(x, M) + H_post * (y_agg * inv_rms * rms_weight).
+
+    When output_dtype is float16 or bfloat16, x must have the same dtype.
+    """
+    if x.ndim != 3:
+        raise ValueError(f"x must be [B, n, C], got shape {x.shape}")
+    if M.ndim != 2:
+        raise ValueError(f"M must be [n, n], got shape {M.shape}")
+    if H_post.ndim != 1:
+        raise ValueError(f"H_post must be [n], got shape {H_post.shape}")
+    if y_agg.ndim != 2:
+        raise ValueError(f"y_agg must be [B, C], got shape {y_agg.shape}")
+    if inv_rms.ndim != 1:
+        raise ValueError(f"inv_rms must be [B], got shape {inv_rms.shape}")
+    if rms_weight.ndim != 1:
+        raise ValueError(f"rms_weight must be [C], got shape {rms_weight.shape}")
+
+    B, n, C = x.shape
+    if M.shape != (n, n):
+        raise ValueError(f"M must be shape (n,n)=( {n},{n} ), got {M.shape}")
+    if H_post.shape != (n,):
+        raise ValueError(f"H_post must be shape (n,)=( {n}, ), got {H_post.shape}")
+    if y_agg.shape != (B, C):
+        raise ValueError(f"y_agg must be shape (B,C)=( {B},{C} ), got {y_agg.shape}")
+    if inv_rms.shape != (B,):
+        raise ValueError(f"inv_rms must be shape (B,)=( {B}, ), got {inv_rms.shape}")
+    if rms_weight.shape != (C,):
+        raise ValueError(f"rms_weight must be shape (C,)=( {C}, ), got {rms_weight.shape}")
+
+    max_n = _validate_n(n)
+    if threads_per_group <= 0:
+        raise ValueError("threads_per_group must be positive")
+    if threads_per_group > _MAX_TPG_ALLOWED:
+        raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED}")
+
+    output_dtype = _normalize_output_dtype(output_dtype)
+    if verbose:
+        if output_dtype == mx.float16:
+            _maybe_print_source(_stream_mix_add_rms_fp16_source(max_n), "stream_mix_add_rms_fp16", True)
+        elif output_dtype == mx.bfloat16:
+            _maybe_print_source(_stream_mix_add_rms_bf16_source(max_n), "stream_mix_add_rms_bf16", True)
+        else:
+            _maybe_print_source(_stream_mix_add_rms_source(max_n), "stream_mix_add_rms", True)
+    if output_dtype is None or output_dtype == mx.float32:
+        x_in = _maybe_cast_float32(x)
+        kernel = _stream_mix_add_rms_kernel(max_n)
+        grid_x = C
+        out_dtype = mx.float32
+    elif output_dtype == mx.float16:
+        if x.dtype != mx.float16:
+            raise ValueError("x must be float16 when output_dtype is float16")
+        x_in = x
+        kernel = _stream_mix_add_rms_fp16_kernel(max_n)
+        grid_x = _ceil_div(C, 2)
+        out_dtype = mx.float16
+    elif output_dtype == mx.bfloat16:
+        if x.dtype != mx.bfloat16:
+            raise ValueError("x must be bfloat16 when output_dtype is bfloat16")
+        x_in = x
+        kernel = _stream_mix_add_rms_bf16_kernel(max_n)
+        grid_x = _ceil_div(C, 2)
+        out_dtype = mx.bfloat16
+    else:
+        raise ValueError(f"unsupported output_dtype: {output_dtype}")
+
+    M_f = M.astype(mx.float32)
+    H_post_f = H_post.astype(mx.float32)
+    y_agg_f = y_agg.astype(mx.float32)
+    inv_rms_f = inv_rms.astype(mx.float32)
+    rms_weight_f = rms_weight.astype(mx.float32)
+
+    out = kernel(
+        inputs=[x_in, M_f, H_post_f, y_agg_f, inv_rms_f, rms_weight_f],
+        grid=(grid_x, B * n, 1),
+        threadgroup=(threads_per_group, 1, 1),
+        output_shapes=[x_in.shape],
+        output_dtypes=[out_dtype],
     )[0]
 
     return out
@@ -446,6 +721,15 @@ def sinkhorn_knopp_metal(
         raise ValueError("threads_per_group must be positive")
     if threads_per_group > _MAX_TPG_ALLOWED:
         raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED}")
+    tpg = int(threads_per_group)
+    if n <= 32 and tpg > n:
+        tpg = int(n)
+    tpg = int(threads_per_group)
+    if n <= 32 and tpg > n:
+        tpg = int(n)
+    tpg = int(threads_per_group)
+    if n <= 32 and tpg > n:
+        tpg = int(n)
 
     if verbose:
         _maybe_print_source(_sinkhorn_source(n, iters, eps), "sinkhorn_knopp", verbose=True)
@@ -455,13 +739,91 @@ def sinkhorn_knopp_metal(
     kernel = _sinkhorn_kernel(n, int(iters), float(eps))
     out = kernel(
         inputs=[H_f],
-        grid=(threads_per_group, 1, 1),
-        threadgroup=(threads_per_group, 1, 1),
+        grid=(tpg, 1, 1),
+        threadgroup=(tpg, 1, 1),
         output_shapes=[H_f.shape],
         output_dtypes=[mx.float32],
     )[0]
 
     return out
+
+
+def mhc_forward_agg_metal(
+    x: mx.array,
+    H_pre: mx.array,
+    threads_per_group: int = 256,
+    verbose: bool = False,
+) -> tuple[mx.array, mx.array]:
+    """Compute y_agg and partial sums for RMS in a tile-parallel kernel."""
+    if x.ndim != 3:
+        raise ValueError(f"x must be [B, n, C], got shape {x.shape}")
+    if H_pre.ndim != 1:
+        raise ValueError(f"H_pre must be [n], got shape {H_pre.shape}")
+
+    B, n, C = x.shape
+    if H_pre.shape != (n,):
+        raise ValueError(f"H_pre must be shape (n,)=( {n}, ), got {H_pre.shape}")
+
+    max_n = _validate_n(n)
+    if threads_per_group <= 0:
+        raise ValueError("threads_per_group must be positive")
+    if threads_per_group > _MAX_TPG_ALLOWED:
+        raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED}")
+
+    if verbose:
+        _maybe_print_source(_mhc_forward_agg_source(max_n), "mhc_forward_agg", verbose=True)
+
+    x_in = _maybe_cast_float32(x)
+    H_pre_f = H_pre.astype(mx.float32)
+
+    tiles = _ceil_div(C, threads_per_group)
+    kernel = _mhc_forward_agg_kernel(max_n)
+    y_agg, partial_sq = kernel(
+        inputs=[x_in, H_pre_f],
+        grid=(C, B, 1),
+        threadgroup=(threads_per_group, 1, 1),
+        output_shapes=[(B, C), (B, tiles)],
+        output_dtypes=[mx.float32, mx.float32],
+    )
+
+    return y_agg, partial_sq
+
+
+def mhc_forward_rms_reduce_metal(
+    y_agg: mx.array,
+    partial_sq: mx.array,
+    eps: float = 1e-5,
+    threads_per_group: int = 256,
+    verbose: bool = False,
+) -> mx.array:
+    """Reduce partial sums into inv_rms for RMSNorm."""
+    if y_agg.ndim != 2:
+        raise ValueError(f"y_agg must be [B, C], got shape {y_agg.shape}")
+    if partial_sq.ndim != 2:
+        raise ValueError(f"partial_sq must be [B, T], got shape {partial_sq.shape}")
+
+    B, _ = y_agg.shape
+    if partial_sq.shape[0] != B:
+        raise ValueError(f"partial_sq must have B rows, got {partial_sq.shape[0]} vs {B}")
+
+    if threads_per_group <= 0:
+        raise ValueError("threads_per_group must be positive")
+    if threads_per_group > _MAX_TPG_ALLOWED:
+        raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED}")
+
+    if verbose:
+        _maybe_print_source(_mhc_forward_rms_reduce_source(eps), "mhc_forward_rms_reduce", True)
+
+    kernel = _mhc_forward_rms_reduce_kernel(float(eps))
+    inv_rms = kernel(
+        inputs=[y_agg.astype(mx.float32), partial_sq.astype(mx.float32)],
+        grid=(threads_per_group, B, 1),
+        threadgroup=(threads_per_group, 1, 1),
+        output_shapes=[(B,)],
+        output_dtypes=[mx.float32],
+    )[0]
+
+    return inv_rms
 
 
 def mhc_forward_fused_metal(
@@ -472,9 +834,10 @@ def mhc_forward_fused_metal(
     rms_weight: mx.array,
     eps: float = 1e-5,
     threads_per_group: int = 256,
+    output_dtype: mx.Dtype | None = None,
     verbose: bool = False,
 ) -> mx.array:
-    """Fused Metal forward: RMSNorm + stream mix + add(y_dist).
+    """Token-parallel Metal forward: aggregate + RMS + mix/add without y_dist.
 
     Args:
         x: [B, n, C] float32, row contiguous
@@ -484,10 +847,11 @@ def mhc_forward_fused_metal(
         rms_weight: [C] float32
         eps: RMSNorm epsilon
         threads_per_group: threadgroup size along x
+        output_dtype: optional output dtype for the mix/add kernel (float16/bfloat16 requires x dtype match)
         verbose: if True, print the kernel body source
 
     Returns:
-        out: [B, n, C] float32
+        out: [B, n, C] float32 unless output_dtype overrides
     """
     if x.ndim != 3:
         raise ValueError(f"x must be [B, n, C], got shape {x.shape}")
@@ -517,23 +881,35 @@ def mhc_forward_fused_metal(
         raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED} for the fused kernel")
 
     if verbose:
-        _maybe_print_source(_mhc_fused_source(max_n, eps), "mhc_fused", verbose=True)
+        _maybe_print_source(_mhc_forward_agg_source(max_n), "mhc_forward_agg", verbose=True)
+        _maybe_print_source(_mhc_forward_rms_reduce_source(eps), "mhc_forward_rms_reduce", verbose=True)
+        _maybe_print_source(_stream_mix_add_rms_source(max_n), "stream_mix_add_rms", verbose=True)
 
-    x_f = x.astype(mx.float32)
-    M_f = M.astype(mx.float32)
-    H_pre_f = H_pre.astype(mx.float32)
-    H_post_f = H_post.astype(mx.float32)
-    rms_weight_f = rms_weight.astype(mx.float32)
+    y_agg, partial_sq = mhc_forward_agg_metal(
+        x,
+        H_pre,
+        threads_per_group=threads_per_group,
+        verbose=False,
+    )
+    inv_rms = mhc_forward_rms_reduce_metal(
+        y_agg,
+        partial_sq,
+        eps=eps,
+        threads_per_group=threads_per_group,
+        verbose=False,
+    )
 
-    kernel = _mhc_fused_kernel(max_n, float(eps))
-
-    out = kernel(
-        inputs=[x_f, M_f, H_pre_f, H_post_f, rms_weight_f],
-        grid=(threads_per_group, B, 1),
-        threadgroup=(threads_per_group, 1, 1),
-        output_shapes=[x_f.shape],
-        output_dtypes=[mx.float32],
-    )[0]
+    out = stream_mix_add_rms_metal(
+        x,
+        M,
+        H_post,
+        y_agg,
+        inv_rms,
+        rms_weight,
+        threads_per_group=threads_per_group,
+        output_dtype=output_dtype,
+        verbose=False,
+    )
 
     return out
 
@@ -557,6 +933,9 @@ def sinkhorn_knopp_backward_metal(
         raise ValueError("threads_per_group must be positive")
     if threads_per_group > _MAX_TPG_ALLOWED:
         raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED}")
+    tpg = int(threads_per_group)
+    if n <= 32 and tpg > n:
+        tpg = int(n)
 
     if verbose:
         _maybe_print_source(_sinkhorn_backward_source(n, iters, eps), "sinkhorn_knopp_backward", True)
@@ -567,8 +946,8 @@ def sinkhorn_knopp_backward_metal(
     kernel = _sinkhorn_backward_kernel(n, int(iters), float(eps))
     out = kernel(
         inputs=[H_f, dM_f],
-        grid=(threads_per_group, 1, 1),
-        threadgroup=(threads_per_group, 1, 1),
+        grid=(tpg, 1, 1),
+        threadgroup=(tpg, 1, 1),
         output_shapes=[H_f.shape],
         output_dtypes=[mx.float32],
     )[0]
@@ -616,6 +995,8 @@ def mhc_backward_prep_metal(
         _maybe_print_source(_mhc_backward_prep_source(max_n, eps), "mhc_backward_prep", True)
 
     x_f = x.astype(mx.float32)
+    x_in = _maybe_cast_float32(x)
+    d_out_in = _maybe_cast_float32(d_out)
     H_pre_f = H_pre.astype(mx.float32)
     H_post_f = H_post.astype(mx.float32)
     rms_weight_f = rms_weight.astype(mx.float32)
@@ -631,6 +1012,106 @@ def mhc_backward_prep_metal(
     )
 
     return y_agg, d_y_norm, inv_rms, d_r
+
+
+def mhc_backward_prep_tile_metal(
+    x: mx.array,
+    H_pre: mx.array,
+    H_post: mx.array,
+    rms_weight: mx.array,
+    d_out: mx.array,
+    threads_per_group: int = 256,
+    verbose: bool = False,
+) -> tuple[mx.array, mx.array, mx.array, mx.array]:
+    """Tile-parallel prep for backward (y_agg, d_y_norm, partial sums)."""
+    if x.ndim != 3:
+        raise ValueError(f"x must be [B, n, C], got shape {x.shape}")
+    if d_out.shape != x.shape:
+        raise ValueError(f"d_out must match x shape, got {d_out.shape} vs {x.shape}")
+    if H_pre.ndim != 1:
+        raise ValueError(f"H_pre must be [n], got shape {H_pre.shape}")
+    if H_post.ndim != 1:
+        raise ValueError(f"H_post must be [n], got shape {H_post.shape}")
+    if rms_weight.ndim != 1:
+        raise ValueError(f"rms_weight must be [C], got shape {rms_weight.shape}")
+
+    B, n, C = x.shape
+    if H_pre.shape != (n,):
+        raise ValueError(f"H_pre must be shape (n,)=( {n}, ), got {H_pre.shape}")
+    if H_post.shape != (n,):
+        raise ValueError(f"H_post must be shape (n,)=( {n}, ), got {H_post.shape}")
+    if rms_weight.shape != (C,):
+        raise ValueError(f"rms_weight must be shape (C,)=( {C}, ), got {rms_weight.shape}")
+
+    max_n = _validate_n(n)
+    if threads_per_group <= 0:
+        raise ValueError("threads_per_group must be positive")
+    if threads_per_group > _MAX_TPG_ALLOWED:
+        raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED}")
+
+    if verbose:
+        _maybe_print_source(_mhc_backward_prep_tile_source(max_n), "mhc_backward_prep_tile", True)
+
+    x_in = _maybe_cast_float32(x)
+    d_out_in = _maybe_cast_float32(d_out)
+    H_pre_f = H_pre.astype(mx.float32)
+    H_post_f = H_post.astype(mx.float32)
+    rms_weight_f = rms_weight.astype(mx.float32)
+
+    tiles = _ceil_div(C, threads_per_group)
+    kernel = _mhc_backward_prep_tile_kernel(max_n)
+    y_agg, d_y_norm, partial_sq, partial_dr = kernel(
+        inputs=[x_in, H_pre_f, H_post_f, rms_weight_f, d_out_in],
+        grid=(C, B, 1),
+        threadgroup=(threads_per_group, 1, 1),
+        output_shapes=[(B, C), (B, C), (B, tiles), (B, tiles)],
+        output_dtypes=[mx.float32, mx.float32, mx.float32, mx.float32],
+    )
+
+    return y_agg, d_y_norm, partial_sq, partial_dr
+
+
+def mhc_backward_rms_reduce_metal(
+    y_agg: mx.array,
+    partial_sq: mx.array,
+    partial_dr: mx.array,
+    eps: float = 1e-5,
+    threads_per_group: int = 256,
+    verbose: bool = False,
+) -> tuple[mx.array, mx.array]:
+    """Reduce partial sums into inv_rms and d_r for backward."""
+    if y_agg.ndim != 2:
+        raise ValueError(f"y_agg must be [B, C], got shape {y_agg.shape}")
+    if partial_sq.ndim != 2:
+        raise ValueError(f"partial_sq must be [B, T], got shape {partial_sq.shape}")
+    if partial_dr.ndim != 2:
+        raise ValueError(f"partial_dr must be [B, T], got shape {partial_dr.shape}")
+
+    B, _ = y_agg.shape
+    if partial_sq.shape[0] != B or partial_dr.shape[0] != B:
+        raise ValueError(
+            "partial sums must have the same batch size as y_agg "
+            f"(got {partial_sq.shape[0]} and {partial_dr.shape[0]} vs {B})"
+        )
+
+    if threads_per_group <= 0:
+        raise ValueError("threads_per_group must be positive")
+    if threads_per_group > _MAX_TPG_ALLOWED:
+        raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED}")
+
+    if verbose:
+        _maybe_print_source(_mhc_backward_rms_reduce_source(eps), "mhc_backward_rms_reduce", True)
+
+    kernel = _mhc_backward_rms_reduce_kernel(float(eps))
+    inv_rms, d_r = kernel(
+        inputs=[y_agg.astype(mx.float32), partial_sq.astype(mx.float32), partial_dr.astype(mx.float32)],
+        grid=(threads_per_group, B, 1),
+        threadgroup=(threads_per_group, 1, 1),
+        output_shapes=[(B,), (B,)],
+        output_dtypes=[mx.float32, mx.float32],
+    )
+
+    return inv_rms, d_r
 
 
 def mhc_backward_dx_metal(
@@ -667,11 +1148,11 @@ def mhc_backward_dx_metal(
     if verbose:
         _maybe_print_source(_mhc_backward_dx_source(max_n), "mhc_backward_dx", True)
 
-    x_f = x.astype(mx.float32)
+    x_in = _maybe_cast_float32(x)
+    d_out_in = _maybe_cast_float32(d_out)
     M_f = M.astype(mx.float32)
     H_pre_f = H_pre.astype(mx.float32)
     rms_weight_f = rms_weight.astype(mx.float32)
-    d_out_f = d_out.astype(mx.float32)
     y_agg_f = y_agg.astype(mx.float32)
     d_y_norm_f = d_y_norm.astype(mx.float32)
     inv_rms_f = inv_rms.astype(mx.float32)
@@ -679,10 +1160,10 @@ def mhc_backward_dx_metal(
 
     kernel = _mhc_backward_dx_kernel(max_n)
     out = kernel(
-        inputs=[x_f, M_f, H_pre_f, rms_weight_f, d_out_f, y_agg_f, d_y_norm_f, inv_rms_f, d_r_f],
+        inputs=[x_in, M_f, H_pre_f, rms_weight_f, d_out_in, y_agg_f, d_y_norm_f, inv_rms_f, d_r_f],
         grid=(C, B * n, 1),
         threadgroup=(threads_per_group, 1, 1),
-        output_shapes=[x_f.shape],
+        output_shapes=[x_in.shape],
         output_dtypes=[mx.float32],
     )[0]
 
@@ -826,9 +1307,10 @@ def mhc_backward_dH_pre_metal(
         _maybe_print_source(_mhc_backward_dH_pre_source(), "mhc_backward_dH_pre", True)
 
     kernel = _mhc_backward_dH_pre_kernel()
+    x_in = _maybe_cast_float32(x)
     out = kernel(
         inputs=[
-            x.astype(mx.float32),
+            x_in,
             y_agg.astype(mx.float32),
             d_y_norm.astype(mx.float32),
             inv_rms.astype(mx.float32),
@@ -873,9 +1355,10 @@ def mhc_backward_dH_post_metal(
         _maybe_print_source(_mhc_backward_dH_post_source(), "mhc_backward_dH_post", True)
 
     kernel = _mhc_backward_dH_post_kernel()
+    d_out_in = _maybe_cast_float32(d_out)
     out = kernel(
         inputs=[
-            d_out.astype(mx.float32),
+            d_out_in,
             y_agg.astype(mx.float32),
             inv_rms.astype(mx.float32),
             rms_weight.astype(mx.float32),
@@ -928,10 +1411,12 @@ def mhc_backward_dH_pre_post_metal(
         _maybe_print_source(_mhc_backward_dH_pre_post_source(), "mhc_backward_dH_pre_post", True)
 
     kernel = _mhc_backward_dH_pre_post_kernel()
+    x_in = _maybe_cast_float32(x)
+    d_out_in = _maybe_cast_float32(d_out)
     dH_pre, dH_post = kernel(
         inputs=[
-            x.astype(mx.float32),
-            d_out.astype(mx.float32),
+            x_in,
+            d_out_in,
             y_agg.astype(mx.float32),
             d_y_norm.astype(mx.float32),
             inv_rms.astype(mx.float32),
@@ -1012,14 +1497,13 @@ def stream_mix_backward_dx_metal(
         _maybe_print_source(_stream_mix_backward_dx_source(max_n), "stream_mix_backward_dx", True)
 
     M_f = M.astype(mx.float32)
-    d_out_f = d_out.astype(mx.float32)
 
     kernel = _stream_mix_backward_dx_kernel(max_n)
     out = kernel(
-        inputs=[M_f, d_out_f],
+        inputs=[M_f, d_out_in],
         grid=(C, B * n, 1),
         threadgroup=(threads_per_group, 1, 1),
-        output_shapes=[d_out_f.shape],
+        output_shapes=[d_out_in.shape],
         output_dtypes=[mx.float32],
     )[0]
 
@@ -1118,7 +1602,14 @@ def sinkhorn_knopp_metal_autograd(
 
 
 @lru_cache(maxsize=64)
-def _mhc_fused_autograd_fn(eps: float, threads_per_group: int, fused_backward: bool):
+def _mhc_fused_autograd_fn(
+    eps: float,
+    threads_per_group: int,
+    fused_backward: bool,
+    output_dtype_key: str,
+):
+    output_dtype = _output_dtype_from_key(output_dtype_key)
+
     @mx.custom_function
     def _f(x, M, H_pre, H_post, rms_weight):
         return mhc_forward_fused_metal(
@@ -1129,6 +1620,7 @@ def _mhc_fused_autograd_fn(eps: float, threads_per_group: int, fused_backward: b
             rms_weight,
             eps=eps,
             threads_per_group=threads_per_group,
+            output_dtype=output_dtype,
             verbose=False,
         )
 
@@ -1136,42 +1628,36 @@ def _mhc_fused_autograd_fn(eps: float, threads_per_group: int, fused_backward: b
     def _f_vjp(primals, cotangents, _):
         x, M, H_pre, H_post, rms_weight = primals
         dout = _as_list(cotangents)[0]
-        if fused_backward:
-            dx, y_agg, d_y_norm, inv_rms, d_r = mhc_backward_fused_dx_metal(
-                x,
-                M,
-                H_pre,
-                H_post,
-                rms_weight,
-                dout,
-                eps=eps,
-                threads_per_group=threads_per_group,
-                verbose=False,
-            )
-        else:
-            y_agg, d_y_norm, inv_rms, d_r = mhc_backward_prep_metal(
-                x,
-                H_pre,
-                H_post,
-                rms_weight,
-                dout,
-                eps=eps,
-                threads_per_group=threads_per_group,
-                verbose=False,
-            )
-            dx = mhc_backward_dx_metal(
-                x,
-                M,
-                H_pre,
-                rms_weight,
-                dout,
-                y_agg,
-                d_y_norm,
-                inv_rms,
-                d_r,
-                threads_per_group=threads_per_group,
-                verbose=False,
-            )
+        y_agg, d_y_norm, partial_sq, partial_dr = mhc_backward_prep_tile_metal(
+            x,
+            H_pre,
+            H_post,
+            rms_weight,
+            dout,
+            threads_per_group=threads_per_group,
+            verbose=False,
+        )
+        inv_rms, d_r = mhc_backward_rms_reduce_metal(
+            y_agg,
+            partial_sq,
+            partial_dr,
+            eps=eps,
+            threads_per_group=threads_per_group,
+            verbose=False,
+        )
+        dx = mhc_backward_dx_metal(
+            x,
+            M,
+            H_pre,
+            rms_weight,
+            dout,
+            y_agg,
+            d_y_norm,
+            inv_rms,
+            d_r,
+            threads_per_group=threads_per_group,
+            verbose=False,
+        )
         dM = mhc_backward_dM_metal(
             x,
             dout,
@@ -1210,11 +1696,22 @@ def mhc_forward_fused_metal_autograd(
     eps: float = 1e-5,
     threads_per_group: int = 256,
     fused_backward: bool = True,
+    output_dtype: mx.Dtype | None = None,
     verbose: bool = False,
 ) -> mx.array:
-    """Fused forward with Metal backward kernels."""
+    """Fused forward with Metal backward kernels.
+
+    output_dtype can request float16/bfloat16 output when x matches that dtype.
+    """
     if verbose:
-        _maybe_print_source(_mhc_fused_source(_validate_n(M.shape[0]), eps), "mhc_fused", True)
-    return _mhc_fused_autograd_fn(float(eps), int(threads_per_group), bool(fused_backward))(
-        x, M, H_pre, H_post, rms_weight
-    )
+        max_n = _validate_n(M.shape[0])
+        _maybe_print_source(_mhc_forward_agg_source(max_n), "mhc_forward_agg", True)
+        _maybe_print_source(_mhc_forward_rms_reduce_source(eps), "mhc_forward_rms_reduce", True)
+        _maybe_print_source(_stream_mix_add_rms_source(max_n), "stream_mix_add_rms", True)
+    output_dtype = _normalize_output_dtype(output_dtype)
+    return _mhc_fused_autograd_fn(
+        float(eps),
+        int(threads_per_group),
+        bool(fused_backward),
+        _output_dtype_key(output_dtype),
+    )(x, M, H_pre, H_post, rms_weight)

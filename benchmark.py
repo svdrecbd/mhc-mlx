@@ -355,7 +355,7 @@ def _run_case(
     mx.eval(rms_weight)
 
     use_auto_dispatch = args.metal_dispatch == "auto"
-    use_latency_policy = dispatch_policy_effective in {"auto", "latency"}
+    use_latency_policy = dispatch_policy_effective == "latency"
     use_throughput_policy = dispatch_policy_effective == "throughput"
     avoid_reasons = []
     if use_auto_dispatch and use_latency_policy:
@@ -384,11 +384,7 @@ def _run_case(
     )
     use_ref_fallback = use_auto_dispatch and avoid_fused and not use_hybrid
     use_fused_metal = not use_hybrid and not use_ref_fallback
-    fused_backward_effective = (
-        args.fused_backward
-        and use_fused_metal
-        and (not use_auto_dispatch or (B * n >= 64 or C >= 4096))
-    )
+    fused_backward_effective = False
     dispatch_path = "fused_metal"
     if use_ref_fallback:
         dispatch_path = "reference"
@@ -728,7 +724,7 @@ def main():
     parser.add_argument("--with-backward", action="store_true")
     parser.add_argument("--fused-backward", dest="fused_backward", action="store_true")
     parser.add_argument("--no-fused-backward", dest="fused_backward", action="store_false")
-    parser.set_defaults(fused_backward=True)
+    parser.set_defaults(fused_backward=False)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", type=str, default="results.jsonl")
     args = parser.parse_args()

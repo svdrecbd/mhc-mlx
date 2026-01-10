@@ -18,6 +18,7 @@ uint lane = thread_position_in_threadgroup.x;
 uint tpg = threads_per_threadgroup.x;
 
 int n = H_res_shape[0];
+bool use_lane_norm = (n <= 32) && (tpg >= uint(n));
 
 threadgroup float H[MAX_N * MAX_N];
 threadgroup float reduce_buf[MAX_TPG];
@@ -33,6 +34,41 @@ for (uint idx = lane; idx < nn; idx += tpg) {
 threadgroup_barrier(mem_flags::mem_threadgroup);
 
 for (int it = 0; it < ITERS; ++it) {
+    if (use_lane_norm) {
+        if (lane < uint(n)) {
+            int r = int(lane);
+            float s = 0.0f;
+            for (int c = 0; c < n; ++c) {
+                s += H[r * n + c];
+            }
+            uchar mask = (s > EPS) ? uchar(1) : uchar(0);
+            float scale = (mask != 0u) ? (1.0f / s) : 1.0f;
+            row_scale[it * MAX_N + r] = scale;
+            row_mask[it * MAX_N + r] = mask;
+            for (int c = 0; c < n; ++c) {
+                H[r * n + c] *= scale;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (lane < uint(n)) {
+            int c = int(lane);
+            float s = 0.0f;
+            for (int r = 0; r < n; ++r) {
+                s += H[r * n + c];
+            }
+            uchar mask = (s > EPS) ? uchar(1) : uchar(0);
+            float scale = (mask != 0u) ? (1.0f / s) : 0.0f;
+            col_scale[it * MAX_N + c] = scale;
+            col_mask[it * MAX_N + c] = mask;
+            for (int r = 0; r < n; ++r) {
+                H[r * n + c] *= scale;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        continue;
+    }
+
     // Row norm
     for (int r = 0; r < n; ++r) {
         float partial = 0.0f;
@@ -117,6 +153,69 @@ for (uint idx = lane; idx < nn; idx += tpg) {
 threadgroup_barrier(mem_flags::mem_threadgroup);
 
 for (int it = ITERS - 1; it >= 0; --it) {
+    if (use_lane_norm) {
+        if (lane < uint(n)) {
+            int c = int(lane);
+            float scale = col_scale[it * MAX_N + c];
+            uchar mask = col_mask[it * MAX_N + c];
+
+            if (mask == 0u) {
+                for (int r = 0; r < n; ++r) {
+                    uint idx = uint(r) * uint(n) + uint(c);
+                    dH_res[idx] = 0.0f;
+                    H[idx] = 0.0f;
+                }
+            } else {
+                float dot = 0.0f;
+                for (int r = 0; r < n; ++r) {
+                    uint idx = uint(r) * uint(n) + uint(c);
+                    float H_out = H[idx];
+                    float H_in = H_out / scale;
+                    dot += dH_res[idx] * H_in;
+                }
+                float scale_sq = scale * scale;
+                for (int r = 0; r < n; ++r) {
+                    uint idx = uint(r) * uint(n) + uint(c);
+                    float H_out = H[idx];
+                    float H_in = H_out / scale;
+                    float g = dH_res[idx];
+                    float d_in = scale * g - scale_sq * dot;
+                    dH_res[idx] = d_in;
+                    H[idx] = H_in;
+                }
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (lane < uint(n)) {
+            int r = int(lane);
+            float scale = row_scale[it * MAX_N + r];
+            uchar mask = row_mask[it * MAX_N + r];
+
+            if (mask != 0u) {
+                float dot = 0.0f;
+                for (int c = 0; c < n; ++c) {
+                    uint idx = uint(r) * uint(n) + uint(c);
+                    float H_out = H[idx];
+                    float H_in = H_out / scale;
+                    dot += dH_res[idx] * H_in;
+                }
+                float scale_sq = scale * scale;
+                for (int c = 0; c < n; ++c) {
+                    uint idx = uint(r) * uint(n) + uint(c);
+                    float H_out = H[idx];
+                    float H_in = H_out / scale;
+                    float g = dH_res[idx];
+                    float d_in = scale * g - scale_sq * dot;
+                    dH_res[idx] = d_in;
+                    H[idx] = H_in;
+                }
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        continue;
+    }
+
     // Backprop through col norm.
     for (int c = 0; c < n; ++c) {
         float scale = col_scale[it * MAX_N + c];

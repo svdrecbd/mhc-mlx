@@ -10,12 +10,12 @@ The forward semantics match the reference implementation in this repo:
 - y_dist = stream_distribute(y_norm, H_post_act)
 - out = stream_mix(x_expanded, M) + y_dist
 
-The Metal fast path uses custom kernels for Sinkhorn and a fused RMSNorm/mix/add pass.
+The Metal fast path uses custom kernels for Sinkhorn plus a token-parallel
+aggregate + RMS reduce + mix/add path.
 Backward uses Metal kernels (no reference VJPs).
-Auto-dispatch defaults to Metal and applies dispatch guardrails based on the
-policy ("latency" avoids fused for n == 32 with small C or B == 1 with larger n,
-"throughput" only allows n == 32 fused when B and C are large). The hybrid path is
-opt-in and gated on C.
+Auto-dispatch defaults to Metal with no guardrails. Guardrails only apply when
+dispatch_policy is explicitly set to "latency" or "throughput". The hybrid path
+is opt-in and gated on C.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ class MHCLayer(nn.Module):
         throughput_allow_fused_n32_min_B: int = 8,
         throughput_allow_fused_n32_min_C: int = 4096,
         throughput_allow_fused_n32_small_C: int = 512,
-        fused_backward: bool = True,
+        fused_backward: bool = False,
     ):
         super().__init__()
 
@@ -136,11 +136,7 @@ class MHCLayer(nn.Module):
         return True
 
     def _latency_policy_enabled(self) -> bool:
-        if self.dispatch_policy == "latency":
-            return True
-        if self.dispatch_policy == "throughput":
-            return False
-        return True
+        return self.dispatch_policy == "latency"
 
     def _throughput_policy_enabled(self) -> bool:
         return self.dispatch_policy == "throughput"
@@ -196,10 +192,8 @@ class MHCLayer(nn.Module):
     def _should_use_fused_backward(self, B: int, n: int, C: int) -> bool:
         if not self.fused_backward:
             return False
-        if not self.auto_dispatch:
-            return True
-        # Small batches under-occupy the fused backward kernel.
-        return (B * n) >= 64 or C >= 4096
+        # Token-parallel backward prep is always used in the Metal path.
+        return False
 
     def _reference_forward(
         self,
@@ -264,6 +258,10 @@ class MHCLayer(nn.Module):
             x_expanded: [B, n, C] input
             return_dtype: if set, cast the output to this dtype
 
+        Note:
+            When return_dtype is float16/bfloat16 and matches x_expanded.dtype,
+            the Metal path emits that dtype directly.
+
         Returns:
             out: [B, n, C]
         """
@@ -274,6 +272,11 @@ class MHCLayer(nn.Module):
             raise ValueError(f"x_expanded n={n} does not match layer n={self.n}")
         if C != self.C:
             raise ValueError(f"x_expanded C={C} does not match layer C={self.C}")
+
+        output_dtype = None
+        if return_dtype is not None and return_dtype == x_expanded.dtype:
+            if return_dtype == mx.float16 or return_dtype == mx.bfloat16:
+                output_dtype = return_dtype
 
         if self._should_use_reference_fallback(B, n, C):
             ref_fn = self._get_reference_runner()
@@ -311,6 +314,7 @@ class MHCLayer(nn.Module):
                 eps=self.eps,
                 threads_per_group=self.threads_per_group,
                 fused_backward=self._should_use_fused_backward(B, n, C),
+                output_dtype=output_dtype,
                 verbose=False,
             )
         else:
@@ -323,6 +327,6 @@ class MHCLayer(nn.Module):
                 self.rms_weight,
             )
 
-        if return_dtype is not None:
+        if return_dtype is not None and out.dtype != return_dtype:
             out = out.astype(return_dtype)
         return out

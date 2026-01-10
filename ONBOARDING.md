@@ -124,7 +124,7 @@ To measure something meaningful:
 - Use throughput mode for steady-state speed and latency mode for per-call cost.
 - Override threads_per_group if you want a fixed launch size; otherwise a heuristic is used.
 - Use repeats + p10/p90 to avoid outliers, and queue-guard to avoid enqueue-only timing.
-- Use `--metal-dispatch auto` to benchmark the default auto-dispatch behavior.
+- Use `--metal-dispatch auto` to benchmark the default auto-dispatch behavior (fused by default, no guardrails).
 - Use `--dispatch-policy latency` to enable latency guardrails; use `--dispatch-policy throughput` to enable throughput guardrails.
 - Use `--with-backward` to time gradient computation.
 
@@ -153,12 +153,12 @@ If you want to see the generated Metal source for debugging:
 
 - For training, use the reference path first to validate numerics.
   The Metal path exposes gradients via Metal backward kernels (no reference VJPs).
-  If you need `mx.compile` on the backward pass, set fused_backward=False to use the non-fused kernels.
+  Backward currently uses token-parallel prep + dx; the fused backward kernel is disabled.
 
-- For inference, use_metal=True is fine and is the intended use. Auto-dispatch uses fused Metal for most shapes; in latency mode it avoids fused Metal for n == 32 with `C <= latency_avoid_fused_n32_max_C` or B == 1 with `n >= latency_avoid_fused_B1_min_n`, routing to the compiled reference fallback (or hybrid when enabled and eligible).
-- In throughput mode, fused Metal for n == 32 is only allowed when `B >= throughput_allow_fused_n32_min_B` and (`C == throughput_allow_fused_n32_small_C` or `C >= throughput_allow_fused_n32_min_C`).
+- For inference, use_metal=True is fine and is the intended use. Auto-dispatch uses fused Metal for all shapes (no guardrails).
+- Use `dispatch_policy=latency` to avoid fused Metal for n == 32 with `C <= latency_avoid_fused_n32_max_C` or B == 1 with `n >= latency_avoid_fused_B1_min_n`, routing to the compiled reference fallback (or hybrid when enabled and eligible).
+- Use `dispatch_policy=throughput` to allow fused Metal for n == 32 only when `B >= throughput_allow_fused_n32_min_B` and (`C == throughput_allow_fused_n32_small_C` or `C >= throughput_allow_fused_n32_min_C`).
 - Use `auto_dispatch=False` to force fused Metal.
-- With auto-dispatch, backward prefers the non-fused kernels unless `B*n >= 64` or `C >= 4096`; set `auto_dispatch=False` to force fused backward.
 
 ## Extending This Repo
 
