@@ -15,21 +15,38 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-## Build
+## Quickstart
 
-No manual build step. Metal kernels JIT-compile on first use. To pre-warm:
+Metal kernels JIT-compile on first use. Run correctness once to warm the cache:
 
 ```bash
 python test_correctness.py
 ```
 
-## Test
+Basic benchmark (auto-dispatch):
 
 ```bash
-python test_correctness.py
+python benchmark.py --metal-dispatch auto
+```
+
+## Usage
+
+```python
+import mlx.core as mx
+from mhc import MHCLayer
+
+B, n, C = 2, 4, 256
+x = mx.random.normal((B, n, C)).astype(mx.bfloat16)
+
+layer = MHCLayer(n=n, C=C, use_metal=True)
+y = layer(x)
+mx.eval(y)
+print(y.shape)  # (B, n, C)
 ```
 
 ## Benchmark
+
+### Run
 
 ```bash
 # End-to-end layer (auto-dispatch)
@@ -56,7 +73,7 @@ python scripts/summarize_benchmarks.py --in results.jsonl
 python scripts/plot_benchmark_speedup.py --summary summary_by_C.csv
 ```
 
-### MLX Benchmark Results (Apple M4 Pro)
+### Results (Apple M4 Pro)
 
 Auto-dispatch benchmark (speedup = reference / Metal, >1 is faster):
 
@@ -65,29 +82,16 @@ Auto-dispatch benchmark (speedup = reference / Metal, >1 is faster):
 - Settings: iters=200, warmup=10, repeats=3, queue_guard=50, dispatch_policy=auto, hybrid_latency=off, hybrid_min_C=8192, latency_avoid_fused_n32_max_C=2048, latency_avoid_fused_B1_min_n=16, throughput_allow_fused_n32_min_B=8, throughput_allow_fused_n32_min_C=4096, throughput_allow_fused_n32_small_C=512, fused_backward=off (forced), with_backward=on, output_dtype=none
 - Backward compiled: on
 - Guardrails are inactive in auto; latency/throughput guardrails apply only when `dispatch_policy` is set explicitly.
-- Results are hardware-specific; rerun on your machine for final numbers.
+- Results from `results_gauntlet_latest_with_backward.jsonl`.
 
 End-to-end MHCLayer (auto-dispatch, median speedup with p10-p90):
 
-| Mode                  | Forward | Backward |
-|-----------------------|---------|----------|
-| Throughput (auto)     | 10.70x (5.77-11.98) | 11.71x (4.69-12.95) |
-| Latency (auto)        | 3.83x (2.52-4.55) | 4.04x (2.77-5.46) |
+| Mode              | Forward | Backward |
+|-------------------|---------|----------|
+| Throughput (auto) | 10.15x (3.09-11.48) | 11.87x (3.54-12.92) |
+| Latency (auto)    | 3.42x (1.89-4.49) | 3.39x (2.33-5.07) |
 
-## Usage
-
-```python
-import mlx.core as mx
-from mhc import MHCLayer
-
-B, n, C = 2, 4, 256
-x = mx.random.normal((B, n, C)).astype(mx.bfloat16)
-
-layer = MHCLayer(n=n, C=C, use_metal=True)
-y = layer(x)
-mx.eval(y)
-print(y.shape)  # (B, n, C)
-```
+![Speedup by C](benchmark_speedup_by_C.png)
 
 ## Semantics
 
@@ -104,7 +108,7 @@ x_mixed[b, i, c] = sum_j M[i, j] * x_expanded[b, j, c]
 out = x_mixed + y_dist
 ```
 
-## Notes
+## Dispatch Notes
 
 - Auto-dispatch uses fused Metal for all shapes; guardrails are enabled only with `dispatch_policy=latency` or `dispatch_policy=throughput`.
 - In latency policy, fused Metal is avoided for n == 32 with `C <= latency_avoid_fused_n32_max_C` or B == 1 with `n >= latency_avoid_fused_B1_min_n`, routing to the compiled reference fallback (or hybrid when enabled and eligible).

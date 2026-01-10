@@ -603,19 +603,19 @@ def _run_case(
                 args._warned_backward_compile = True
             backward_compiled = False
 
-    def ref_loss(x, H_pre_raw, H_post_raw, H_res_raw, rms_weight):
-        out = mhc_forward_reference(
-            x_expanded=x,
-            H_pre_raw=H_pre_raw,
-            H_post_raw=H_post_raw,
-            H_res_raw=H_res_raw,
-            rms_weight=rms_weight,
-            sinkhorn_iters=args.sinkhorn_iters,
-            eps=args.eps,
-        )
-        if output_dtype is not None and out.dtype != output_dtype:
-            out = out.astype(output_dtype)
-        return mx.sum(out)
+        def ref_loss(x, H_pre_raw, H_post_raw, H_res_raw, rms_weight):
+            out = mhc_forward_reference(
+                x_expanded=x,
+                H_pre_raw=H_pre_raw,
+                H_post_raw=H_post_raw,
+                H_res_raw=H_res_raw,
+                rms_weight=rms_weight,
+                sinkhorn_iters=args.sinkhorn_iters,
+                eps=args.eps,
+            )
+            if output_dtype is not None and out.dtype != output_dtype:
+                out = out.astype(output_dtype)
+            return mx.sum(out)
 
         def metal_loss(x, H_pre_raw, H_post_raw, H_res_raw, rms_weight):
             if use_ref_fallback:
