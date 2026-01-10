@@ -60,6 +60,7 @@ class MHCLayer(nn.Module):
         throughput_allow_fused_n32_min_C: int = 4096,
         throughput_allow_fused_n32_small_C: int = 512,
         fused_backward: bool = False,
+        mix_kernel: str = "auto",
     ):
         super().__init__()
 
@@ -81,6 +82,8 @@ class MHCLayer(nn.Module):
             raise ValueError("throughput_allow_fused_n32_min_C must be positive")
         if throughput_allow_fused_n32_small_C < 0:
             raise ValueError("throughput_allow_fused_n32_small_C must be >= 0")
+        if mix_kernel not in {"auto", "1d", "2d"}:
+            raise ValueError("mix_kernel must be one of: auto, 1d, 2d")
 
         self.n = int(n)
         self.C = int(C)
@@ -97,6 +100,7 @@ class MHCLayer(nn.Module):
         self.throughput_allow_fused_n32_min_C = int(throughput_allow_fused_n32_min_C)
         self.throughput_allow_fused_n32_small_C = int(throughput_allow_fused_n32_small_C)
         self.fused_backward = bool(fused_backward)
+        self.mix_kernel = str(mix_kernel)
         if threads_per_group is None:
             self.threads_per_group = suggest_threads_per_group(self.C)
         else:
@@ -315,6 +319,7 @@ class MHCLayer(nn.Module):
                 threads_per_group=self.threads_per_group,
                 fused_backward=self._should_use_fused_backward(B, n, C),
                 output_dtype=output_dtype,
+                mix_kernel=self.mix_kernel,
                 verbose=False,
             )
         else:

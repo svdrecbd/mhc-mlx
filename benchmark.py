@@ -321,7 +321,8 @@ def _run_case(
     if tpg is None:
         tpg = suggest_threads_per_group(C)
     output_dtype = args.output_dtype
-    mix_tpg = mix_add_rms_threadgroup_size(n, output_dtype, tpg)
+    mix_kernel = args.mix_kernel
+    mix_tpg = mix_add_rms_threadgroup_size(n, output_dtype, tpg, mix_kernel)
 
     dispatch_policy_effective = args.dispatch_policy
 
@@ -331,6 +332,7 @@ def _run_case(
         use_metal=False,
         threads_per_group=tpg,
         compile_reference=False,
+        mix_kernel=mix_kernel,
     )
     metal = MHCLayer(
         n=n,
@@ -348,6 +350,7 @@ def _run_case(
         throughput_allow_fused_n32_min_C=args.throughput_allow_fused_n32_min_C,
         throughput_allow_fused_n32_small_C=args.throughput_allow_fused_n32_small_C,
         fused_backward=args.fused_backward,
+        mix_kernel=mix_kernel,
     )
 
     ref.H_pre_raw = H_pre_raw
@@ -417,6 +420,7 @@ def _run_case(
         "queue_guard": args.queue_guard,
         "threads_per_group": tpg,
         "mix_threads_per_group": mix_tpg,
+        "mix_kernel": mix_kernel,
         "seed": args.seed + case_id,
         "output_dtype": _dtype_name(output_dtype) if output_dtype is not None else "none",
         "dispatch_path": dispatch_path,
@@ -536,6 +540,7 @@ def _run_case(
             eps=args.eps,
             threads_per_group=tpg,
             output_dtype=output_dtype,
+            mix_kernel=mix_kernel,
             verbose=False,
         ),
         x,
@@ -661,6 +666,7 @@ def _run_case(
                 threads_per_group=tpg,
                 fused_backward=fused_backward_effective,
                 output_dtype=output_dtype,
+                mix_kernel=mix_kernel,
                 verbose=False,
             )
             if output_dtype is not None and out.dtype != output_dtype:
@@ -710,7 +716,7 @@ def _run_case(
     avoid_label = avoid_reason or "none"
     print(
         f"[{args.mode}] case {case_id}: B={B} n={n} C={C} dtype={_dtype_name(dtype)} "
-        f"tpg={tpg} mix_tpg={mix_tpg} out={_dtype_name(output_dtype) if output_dtype else 'none'} "
+        f"tpg={tpg} mix_tpg={mix_tpg} mix={mix_kernel} out={_dtype_name(output_dtype) if output_dtype else 'none'} "
         f"path={dispatch_path} fused_bw={fused_backward_effective} "
         f"policy={dispatch_policy_effective} avoid={avoid_label}"
     )
@@ -733,6 +739,12 @@ def main():
         type=str,
         default="none",
         help="Optional output dtype for layer/fused outputs (none, float16, bfloat16, float32).",
+    )
+    parser.add_argument(
+        "--mix-kernel",
+        type=str,
+        default="auto",
+        help="Mix/add kernel selection (auto, 1d, 2d).",
     )
     parser.add_argument("--metal-dispatch", type=str, choices=["auto", "force"], default="auto")
     parser.add_argument(

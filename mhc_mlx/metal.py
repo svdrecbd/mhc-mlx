@@ -18,6 +18,9 @@ _STREAM_MIX_ADD_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add.metal")
 _STREAM_MIX_ADD_RMS_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms.metal")
 _STREAM_MIX_ADD_RMS_FP16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_fp16.metal")
 _STREAM_MIX_ADD_RMS_BF16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_bf16.metal")
+_STREAM_MIX_ADD_RMS_TILE_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_tile.metal")
+_STREAM_MIX_ADD_RMS_TILE2D_FP16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_tile2d_fp16.metal")
+_STREAM_MIX_ADD_RMS_TILE2D_BF16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_tile2d_bf16.metal")
 _STREAM_MIX_ADD_RMS_TILE_F32_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_tile_f32.metal")
 _STREAM_MIX_ADD_RMS_TILE_FP16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_tile_fp16.metal")
 _STREAM_MIX_ADD_RMS_TILE_BF16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_tile_bf16.metal")
@@ -41,6 +44,23 @@ _STREAM_MIX_BACKWARD_DX_PATH = os.path.join(_KERNEL_DIR, "stream_mix_backward_dx
 
 _MAX_N_ALLOWED = 64
 _MAX_TPG_ALLOWED = 256
+
+
+def _max_threads_per_threadgroup() -> int:
+    return 1024
+
+
+def _tile_tpg_x(n: int, requested: int) -> int:
+    if n <= 0:
+        raise ValueError("n must be positive")
+    if requested <= 0:
+        raise ValueError("requested must be positive")
+    cap = min(int(_MAX_TPG_ALLOWED), int(_max_threads_per_threadgroup() // int(n)))
+    if cap <= 0:
+        return 1
+    target = min(int(requested), int(cap))
+    tpg = 1 << (target.bit_length() - 1)
+    return max(1, int(tpg))
 
 
 def _read_source(path: str) -> str:
@@ -154,6 +174,63 @@ def _stream_mix_add_rms_bf16_kernel(max_n: int) -> object:
 def _stream_mix_add_rms_bf16_source(max_n: int) -> str:
     return _render_source(
         _STREAM_MIX_ADD_RMS_BF16_PATH,
+        MAX_N=str(int(max_n)),
+    )
+
+
+@lru_cache(maxsize=8)
+def _stream_mix_add_rms_tile_kernel(max_n: int) -> object:
+    source = _stream_mix_add_rms_tile_source(max_n)
+    return mx.fast.metal_kernel(
+        name="stream_mix_add_rms_tile",
+        input_names=["x", "M", "H_post", "y_agg", "inv_rms", "rms_weight"],
+        output_names=["out"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _stream_mix_add_rms_tile_source(max_n: int) -> str:
+    return _render_source(
+        _STREAM_MIX_ADD_RMS_TILE_PATH,
+        MAX_N=str(int(max_n)),
+    )
+
+
+@lru_cache(maxsize=8)
+def _stream_mix_add_rms_tile2d_fp16_kernel(max_n: int) -> object:
+    source = _stream_mix_add_rms_tile2d_fp16_source(max_n)
+    return mx.fast.metal_kernel(
+        name="stream_mix_add_rms_tile2d_fp16",
+        input_names=["x", "M", "H_post", "y_agg", "inv_rms", "rms_weight"],
+        output_names=["out"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _stream_mix_add_rms_tile2d_fp16_source(max_n: int) -> str:
+    return _render_source(
+        _STREAM_MIX_ADD_RMS_TILE2D_FP16_PATH,
+        MAX_N=str(int(max_n)),
+    )
+
+
+@lru_cache(maxsize=8)
+def _stream_mix_add_rms_tile2d_bf16_kernel(max_n: int) -> object:
+    source = _stream_mix_add_rms_tile2d_bf16_source(max_n)
+    return mx.fast.metal_kernel(
+        name="stream_mix_add_rms_tile2d_bf16",
+        input_names=["x", "M", "H_post", "y_agg", "inv_rms", "rms_weight"],
+        output_names=["out"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _stream_mix_add_rms_tile2d_bf16_source(max_n: int) -> str:
+    return _render_source(
+        _STREAM_MIX_ADD_RMS_TILE2D_BF16_PATH,
         MAX_N=str(int(max_n)),
     )
 
@@ -593,6 +670,13 @@ def _normalize_output_dtype(output_dtype: mx.Dtype | None) -> mx.Dtype | None:
     raise ValueError(f"unsupported output_dtype: {output_dtype}")
 
 
+def _normalize_mix_kernel(mix_kernel: str) -> str:
+    key = (mix_kernel or "auto").strip().lower()
+    if key in {"auto", "1d", "2d"}:
+        return key
+    raise ValueError(f"unsupported mix_kernel: {mix_kernel}")
+
+
 def _output_dtype_key(output_dtype: mx.Dtype | None) -> str:
     if output_dtype is None or output_dtype == mx.float32:
         return "float32"
@@ -630,9 +714,25 @@ def _mix_add_rms_tile_config(
 
 
 def mix_add_rms_threadgroup_size(
-    n: int, output_dtype: mx.Dtype | None, threads_per_group: int
+    n: int, output_dtype: mx.Dtype | None, threads_per_group: int, mix_kernel: str = "auto"
 ) -> int:
     output_dtype = _normalize_output_dtype(output_dtype)
+    mix_kernel = _normalize_mix_kernel(mix_kernel)
+    if mix_kernel == "2d":
+        tpg_x = _tile_tpg_x(n, threads_per_group)
+        return int(tpg_x * n)
+    if mix_kernel == "1d":
+        tile_cfg = _mix_add_rms_tile_config(n, output_dtype)
+        if tile_cfg is None:
+            return int(threads_per_group)
+        _, _, tpg, _ = tile_cfg
+        return int(tpg)
+    if output_dtype is None and n >= 16:
+        tpg_x = _tile_tpg_x(n, threads_per_group)
+        return int(tpg_x * n)
+    if output_dtype in (mx.float16, mx.bfloat16) and n >= 16:
+        tpg_x = _tile_tpg_x(n, threads_per_group)
+        return int(tpg_x * n)
     tile_cfg = _mix_add_rms_tile_config(n, output_dtype)
     if tile_cfg is None:
         return int(threads_per_group)
@@ -721,11 +821,13 @@ def stream_mix_add_rms_metal(
     rms_weight: mx.array,
     threads_per_group: int = 256,
     output_dtype: mx.Dtype | None = None,
+    mix_kernel: str = "auto",
     verbose: bool = False,
 ) -> mx.array:
     """Compute out = stream_mix(x, M) + H_post * (y_agg * inv_rms * rms_weight).
 
     When output_dtype is float16 or bfloat16, x must have the same dtype.
+    mix_kernel selects the implementation ("auto", "1d", "2d").
     """
     if x.ndim != 3:
         raise ValueError(f"x must be [B, n, C], got shape {x.shape}")
@@ -755,8 +857,76 @@ def stream_mix_add_rms_metal(
     max_n = _validate_n(n)
     if threads_per_group <= 0:
         raise ValueError("threads_per_group must be positive")
-
     output_dtype = _normalize_output_dtype(output_dtype)
+    mix_kernel = _normalize_mix_kernel(mix_kernel)
+    if mix_kernel == "2d":
+        if output_dtype is None:
+            return stream_mix_add_rms_tile_metal(
+                x,
+                M,
+                H_post,
+                y_agg,
+                inv_rms,
+                rms_weight,
+                threads_per_group=threads_per_group,
+                verbose=verbose,
+            )
+        if output_dtype == mx.float16:
+            return stream_mix_add_rms_tile2d_fp16_metal(
+                x,
+                M,
+                H_post,
+                y_agg,
+                inv_rms,
+                rms_weight,
+                threads_per_group=threads_per_group,
+                verbose=verbose,
+            )
+        if output_dtype == mx.bfloat16:
+            return stream_mix_add_rms_tile2d_bf16_metal(
+                x,
+                M,
+                H_post,
+                y_agg,
+                inv_rms,
+                rms_weight,
+                threads_per_group=threads_per_group,
+                verbose=verbose,
+            )
+    if mix_kernel == "auto" and output_dtype is None and n >= 16:
+        return stream_mix_add_rms_tile_metal(
+            x,
+            M,
+            H_post,
+            y_agg,
+            inv_rms,
+            rms_weight,
+            threads_per_group=threads_per_group,
+            verbose=verbose,
+        )
+    if mix_kernel == "auto" and output_dtype == mx.float16 and n >= 16:
+        return stream_mix_add_rms_tile2d_fp16_metal(
+            x,
+            M,
+            H_post,
+            y_agg,
+            inv_rms,
+            rms_weight,
+            threads_per_group=threads_per_group,
+            verbose=verbose,
+        )
+    if mix_kernel == "auto" and output_dtype == mx.bfloat16 and n >= 16:
+        return stream_mix_add_rms_tile2d_bf16_metal(
+            x,
+            M,
+            H_post,
+            y_agg,
+            inv_rms,
+            rms_weight,
+            threads_per_group=threads_per_group,
+            verbose=verbose,
+        )
+
     tile_cfg = _mix_add_rms_tile_config(n, output_dtype)
     if tile_cfg is None:
         effective_tpg = int(threads_per_group)
@@ -766,7 +936,22 @@ def stream_mix_add_rms_metal(
         raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED}")
 
     if verbose:
-        if tile_cfg is not None:
+        if mix_kernel == "2d":
+            if output_dtype == mx.float16:
+                _maybe_print_source(
+                    _stream_mix_add_rms_tile2d_fp16_source(max_n),
+                    "stream_mix_add_rms_tile2d_fp16",
+                    True,
+                )
+            elif output_dtype == mx.bfloat16:
+                _maybe_print_source(
+                    _stream_mix_add_rms_tile2d_bf16_source(max_n),
+                    "stream_mix_add_rms_tile2d_bf16",
+                    True,
+                )
+            else:
+                _maybe_print_source(_stream_mix_add_rms_tile_source(max_n), "stream_mix_add_rms_tile", True)
+        elif tile_cfg is not None:
             tile_c, _, _, _ = tile_cfg
             if output_dtype == mx.float16:
                 _maybe_print_source(
@@ -846,6 +1031,215 @@ def stream_mix_add_rms_metal(
         output_dtypes=[out_dtype],
     )[0]
 
+    return out
+
+
+def stream_mix_add_rms_tile_metal(
+    x: mx.array,
+    M: mx.array,
+    H_post: mx.array,
+    y_agg: mx.array,
+    inv_rms: mx.array,
+    rms_weight: mx.array,
+    threads_per_group: int = 256,
+    verbose: bool = False,
+) -> mx.array:
+    """Tile-parallel stream mix add + RMS in float32 using a 2D threadgroup."""
+    if x.ndim != 3:
+        raise ValueError(f"x must be [B, n, C], got shape {x.shape}")
+    if M.ndim != 2:
+        raise ValueError(f"M must be [n, n], got shape {M.shape}")
+    if H_post.ndim != 1:
+        raise ValueError(f"H_post must be [n], got shape {H_post.shape}")
+    if y_agg.ndim != 2:
+        raise ValueError(f"y_agg must be [B, C], got shape {y_agg.shape}")
+    if inv_rms.ndim != 1:
+        raise ValueError(f"inv_rms must be [B], got shape {inv_rms.shape}")
+    if rms_weight.ndim != 1:
+        raise ValueError(f"rms_weight must be [C], got shape {rms_weight.shape}")
+
+    B, n, C = x.shape
+    if M.shape != (n, n):
+        raise ValueError(f"M must be shape (n,n)=( {n},{n} ), got {M.shape}")
+    if H_post.shape != (n,):
+        raise ValueError(f"H_post must be shape (n,)=( {n}, ), got {H_post.shape}")
+    if y_agg.shape != (B, C):
+        raise ValueError(f"y_agg must be shape (B,C)=( {B},{C} ), got {y_agg.shape}")
+    if inv_rms.shape != (B,):
+        raise ValueError(f"inv_rms must be shape (B,)=( {B}, ), got {inv_rms.shape}")
+    if rms_weight.shape != (C,):
+        raise ValueError(f"rms_weight must be shape (C,)=( {C}, ), got {rms_weight.shape}")
+
+    max_n = _validate_n(n)
+    if threads_per_group <= 0:
+        raise ValueError("threads_per_group must be positive")
+    tpg_x = _tile_tpg_x(n, int(threads_per_group))
+    tpg_y = int(n)
+    if tpg_x * tpg_y > _max_threads_per_threadgroup():
+        raise ValueError("invalid threadgroup size")
+
+    if verbose:
+        _maybe_print_source(
+            _stream_mix_add_rms_tile_source(max_n),
+            "stream_mix_add_rms_tile",
+            verbose=True,
+        )
+
+    x_in = _maybe_cast_float32(x)
+    M_f = M.astype(mx.float32)
+    H_post_f = H_post.astype(mx.float32)
+    y_agg_f = y_agg.astype(mx.float32)
+    inv_rms_f = inv_rms.astype(mx.float32)
+    rms_weight_f = rms_weight.astype(mx.float32)
+
+    kernel = _stream_mix_add_rms_tile_kernel(max_n)
+    out = kernel(
+        inputs=[x_in, M_f, H_post_f, y_agg_f, inv_rms_f, rms_weight_f],
+        grid=(C, B * n, 1),
+        threadgroup=(tpg_x, tpg_y, 1),
+        output_shapes=[(B, n, C)],
+        output_dtypes=[mx.float32],
+    )[0]
+    return out
+
+
+def stream_mix_add_rms_tile2d_fp16_metal(
+    x: mx.array,
+    M: mx.array,
+    H_post: mx.array,
+    y_agg: mx.array,
+    inv_rms: mx.array,
+    rms_weight: mx.array,
+    threads_per_group: int = 256,
+    verbose: bool = False,
+) -> mx.array:
+    """2D threadgroup stream mix add + RMS with float16 output."""
+    if x.ndim != 3:
+        raise ValueError(f"x must be [B, n, C], got shape {x.shape}")
+    if M.ndim != 2:
+        raise ValueError(f"M must be [n, n], got shape {M.shape}")
+    if H_post.ndim != 1:
+        raise ValueError(f"H_post must be [n], got shape {H_post.shape}")
+    if y_agg.ndim != 2:
+        raise ValueError(f"y_agg must be [B, C], got shape {y_agg.shape}")
+    if inv_rms.ndim != 1:
+        raise ValueError(f"inv_rms must be [B], got shape {inv_rms.shape}")
+    if rms_weight.ndim != 1:
+        raise ValueError(f"rms_weight must be [C], got shape {rms_weight.shape}")
+
+    B, n, C = x.shape
+    if M.shape != (n, n):
+        raise ValueError(f"M must be shape (n,n)=( {n},{n} ), got {M.shape}")
+    if H_post.shape != (n,):
+        raise ValueError(f"H_post must be shape (n,)=( {n}, ), got {H_post.shape}")
+    if y_agg.shape != (B, C):
+        raise ValueError(f"y_agg must be shape (B,C)=( {B},{C} ), got {y_agg.shape}")
+    if inv_rms.shape != (B,):
+        raise ValueError(f"inv_rms must be shape (B,)=( {B}, ), got {inv_rms.shape}")
+    if rms_weight.shape != (C,):
+        raise ValueError(f"rms_weight must be shape (C,)=( {C}, ), got {rms_weight.shape}")
+    if x.dtype != mx.float16:
+        raise ValueError("x must be float16 for float16 output")
+
+    max_n = _validate_n(n)
+    if threads_per_group <= 0:
+        raise ValueError("threads_per_group must be positive")
+    tpg_x = _tile_tpg_x(n, int(threads_per_group))
+    tpg_y = int(n)
+    if tpg_x * tpg_y > _max_threads_per_threadgroup():
+        raise ValueError("invalid threadgroup size")
+
+    if verbose:
+        _maybe_print_source(
+            _stream_mix_add_rms_tile2d_fp16_source(max_n),
+            "stream_mix_add_rms_tile2d_fp16",
+            verbose=True,
+        )
+
+    M_f = M.astype(mx.float32)
+    H_post_f = H_post.astype(mx.float32)
+    y_agg_f = y_agg.astype(mx.float32)
+    inv_rms_f = inv_rms.astype(mx.float32)
+    rms_weight_f = rms_weight.astype(mx.float32)
+
+    kernel = _stream_mix_add_rms_tile2d_fp16_kernel(max_n)
+    out = kernel(
+        inputs=[x, M_f, H_post_f, y_agg_f, inv_rms_f, rms_weight_f],
+        grid=(_ceil_div(C, 2), B * n, 1),
+        threadgroup=(tpg_x, tpg_y, 1),
+        output_shapes=[(B, n, C)],
+        output_dtypes=[mx.float16],
+    )[0]
+    return out
+
+
+def stream_mix_add_rms_tile2d_bf16_metal(
+    x: mx.array,
+    M: mx.array,
+    H_post: mx.array,
+    y_agg: mx.array,
+    inv_rms: mx.array,
+    rms_weight: mx.array,
+    threads_per_group: int = 256,
+    verbose: bool = False,
+) -> mx.array:
+    """2D threadgroup stream mix add + RMS with bfloat16 output."""
+    if x.ndim != 3:
+        raise ValueError(f"x must be [B, n, C], got shape {x.shape}")
+    if M.ndim != 2:
+        raise ValueError(f"M must be [n, n], got shape {M.shape}")
+    if H_post.ndim != 1:
+        raise ValueError(f"H_post must be [n], got shape {H_post.shape}")
+    if y_agg.ndim != 2:
+        raise ValueError(f"y_agg must be [B, C], got shape {y_agg.shape}")
+    if inv_rms.ndim != 1:
+        raise ValueError(f"inv_rms must be [B], got shape {inv_rms.shape}")
+    if rms_weight.ndim != 1:
+        raise ValueError(f"rms_weight must be [C], got shape {rms_weight.shape}")
+
+    B, n, C = x.shape
+    if M.shape != (n, n):
+        raise ValueError(f"M must be shape (n,n)=( {n},{n} ), got {M.shape}")
+    if H_post.shape != (n,):
+        raise ValueError(f"H_post must be shape (n,)=( {n}, ), got {H_post.shape}")
+    if y_agg.shape != (B, C):
+        raise ValueError(f"y_agg must be shape (B,C)=( {B},{C} ), got {y_agg.shape}")
+    if inv_rms.shape != (B,):
+        raise ValueError(f"inv_rms must be shape (B,)=( {B}, ), got {inv_rms.shape}")
+    if rms_weight.shape != (C,):
+        raise ValueError(f"rms_weight must be shape (C,)=( {C}, ), got {rms_weight.shape}")
+    if x.dtype != mx.bfloat16:
+        raise ValueError("x must be bfloat16 for bfloat16 output")
+
+    max_n = _validate_n(n)
+    if threads_per_group <= 0:
+        raise ValueError("threads_per_group must be positive")
+    tpg_x = _tile_tpg_x(n, int(threads_per_group))
+    tpg_y = int(n)
+    if tpg_x * tpg_y > _max_threads_per_threadgroup():
+        raise ValueError("invalid threadgroup size")
+
+    if verbose:
+        _maybe_print_source(
+            _stream_mix_add_rms_tile2d_bf16_source(max_n),
+            "stream_mix_add_rms_tile2d_bf16",
+            verbose=True,
+        )
+
+    M_f = M.astype(mx.float32)
+    H_post_f = H_post.astype(mx.float32)
+    y_agg_f = y_agg.astype(mx.float32)
+    inv_rms_f = inv_rms.astype(mx.float32)
+    rms_weight_f = rms_weight.astype(mx.float32)
+
+    kernel = _stream_mix_add_rms_tile2d_bf16_kernel(max_n)
+    out = kernel(
+        inputs=[x, M_f, H_post_f, y_agg_f, inv_rms_f, rms_weight_f],
+        grid=(_ceil_div(C, 2), B * n, 1),
+        threadgroup=(tpg_x, tpg_y, 1),
+        output_shapes=[(B, n, C)],
+        output_dtypes=[mx.bfloat16],
+    )[0]
     return out
 
 
@@ -998,6 +1392,7 @@ def mhc_forward_fused_metal(
     eps: float = 1e-5,
     threads_per_group: int = 256,
     output_dtype: mx.Dtype | None = None,
+    mix_kernel: str = "auto",
     verbose: bool = False,
 ) -> mx.array:
     """Token-parallel Metal forward: aggregate + RMS + mix/add without y_dist.
@@ -1011,6 +1406,7 @@ def mhc_forward_fused_metal(
         eps: RMSNorm epsilon
         threads_per_group: threadgroup size along x
         output_dtype: optional output dtype for the mix/add kernel (float16/bfloat16 requires x dtype match)
+        mix_kernel: mix/add kernel selection ("auto", "1d", "2d")
         verbose: if True, print the kernel body source
 
     Returns:
@@ -1071,6 +1467,7 @@ def mhc_forward_fused_metal(
         rms_weight,
         threads_per_group=threads_per_group,
         output_dtype=output_dtype,
+        mix_kernel=mix_kernel,
         verbose=False,
     )
 
@@ -1770,8 +2167,10 @@ def _mhc_fused_autograd_fn(
     threads_per_group: int,
     fused_backward: bool,
     output_dtype_key: str,
+    mix_kernel_key: str,
 ):
     output_dtype = _output_dtype_from_key(output_dtype_key)
+    mix_kernel = _normalize_mix_kernel(mix_kernel_key)
 
     @mx.custom_function
     def _f(x, M, H_pre, H_post, rms_weight):
@@ -1784,6 +2183,7 @@ def _mhc_fused_autograd_fn(
             eps=eps,
             threads_per_group=threads_per_group,
             output_dtype=output_dtype,
+            mix_kernel=mix_kernel,
             verbose=False,
         )
 
@@ -1860,11 +2260,13 @@ def mhc_forward_fused_metal_autograd(
     threads_per_group: int = 256,
     fused_backward: bool = True,
     output_dtype: mx.Dtype | None = None,
+    mix_kernel: str = "auto",
     verbose: bool = False,
 ) -> mx.array:
     """Fused forward with Metal backward kernels.
 
     output_dtype can request float16/bfloat16 output when x matches that dtype.
+    mix_kernel selects the mix/add implementation ("auto", "1d", "2d").
     """
     if verbose:
         max_n = _validate_n(M.shape[0])
@@ -1872,9 +2274,11 @@ def mhc_forward_fused_metal_autograd(
         _maybe_print_source(_mhc_forward_rms_reduce_source(eps), "mhc_forward_rms_reduce", True)
         _maybe_print_source(_stream_mix_add_rms_source(max_n), "stream_mix_add_rms", True)
     output_dtype = _normalize_output_dtype(output_dtype)
+    mix_kernel = _normalize_mix_kernel(mix_kernel)
     return _mhc_fused_autograd_fn(
         float(eps),
         int(threads_per_group),
         bool(fused_backward),
         _output_dtype_key(output_dtype),
+        mix_kernel,
     )(x, M, H_pre, H_post, rms_weight)
