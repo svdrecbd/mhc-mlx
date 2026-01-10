@@ -73,10 +73,10 @@ out = x_mixed + y_dist
 - `tests/test_correctness.py`
   - Pytest suite for forward/backward correctness checks
 
-- `run_correctness.py`
+- `scripts/run_correctness.py`
   - Convenience runner for the correctness suite (pytest required)
 
-- `benchmark.py`
+- `scripts/benchmark.py`
   - Benchmark suite with correctness checks and JSONL output
 
 ## Installation
@@ -106,7 +106,7 @@ pip install -e ".[dev]"
    - Confirm shapes and dtypes match what you expect.
 
 2. Turn on Metal
-   - Run `python run_correctness.py` to warm Metal JIT and compare.
+   - Run `python scripts/run_correctness.py` to warm Metal JIT and compare.
    - If it fails, reduce the repro to the smallest case:
      - B=1, n=4, C=8
      - random but deterministic inputs (seeded)
@@ -135,7 +135,7 @@ To measure something meaningful:
 Run:
 
 ```
-python benchmark.py
+python scripts/benchmark.py
 ```
 
 By default this runs both throughput and latency modes and writes one JSON dict per line to results.jsonl.

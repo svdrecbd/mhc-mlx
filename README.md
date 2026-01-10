@@ -39,7 +39,7 @@ print(y.shape)  # (B, n, C)
 Run the default correctness suite (also warms Metal JIT caches):
 
 ```bash
-python run_correctness.py
+python scripts/run_correctness.py
 ```
 
 Run the full pytest suite:
@@ -68,19 +68,19 @@ MHC_MLX_RUN_STRESS=1 python -m pytest -m stress
 
 ```bash
 # End-to-end layer (auto-dispatch)
-python benchmark.py --metal-dispatch auto
+python scripts/benchmark.py --metal-dispatch auto
 
 # Include backward
-python benchmark.py --with-backward --metal-dispatch auto
+python scripts/benchmark.py --with-backward --metal-dispatch auto
 
 # Latency policy (guardrails) + hybrid option
-python benchmark.py --mode latency --dispatch-policy latency --hybrid-latency --hybrid-min-C 4096
+python scripts/benchmark.py --mode latency --dispatch-policy latency --hybrid-latency --hybrid-min-C 4096
 
 # Safe throughput policy for n=32
-python benchmark.py --mode throughput --dispatch-policy throughput
+python scripts/benchmark.py --mode throughput --dispatch-policy throughput
 
 # Optional: reduce sync overhead variance in latency mode
-MLX_METAL_FAST_SYNCH=1 python benchmark.py --mode latency
+MLX_METAL_FAST_SYNCH=1 python scripts/benchmark.py --mode latency
 
 # Summarize and plot
 python scripts/summarize_benchmarks.py --in results.jsonl
@@ -122,7 +122,7 @@ Layer speedup by dtype (median [p10-p90]):
 | bfloat16 | 9.97x (5.49-11.35) | 11.77x (4.62-13.40) | 3.80x (2.63-4.33) | 3.79x (2.65-4.75) |
 | float32  | 10.79x (5.15-12.16) | 12.06x (4.68-13.37) | 3.78x (2.59-4.39) | 3.86x (2.65-5.29) |
 
-![Speedup by C](./benchmark_speedup_by_C.png)
+![Speedup by C](assets/benchmark_speedup_by_C.png)
 
 ## Semantics
 
