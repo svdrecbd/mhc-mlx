@@ -49,7 +49,7 @@ _MHC_BACKWARD_RMS_REDUCE_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_rms_redu
 _STREAM_MIX_BACKWARD_DX_PATH = os.path.join(_KERNEL_DIR, "stream_mix_backward_dx.metal")
 
 _MAX_N_ALLOWED = 64
-_MAX_TPG_ALLOWED = 256
+_MAX_TPG_ALLOWED = 1024
 
 
 def _max_threads_per_threadgroup() -> int:
@@ -418,8 +418,8 @@ def _sinkhorn_source(max_n: int, iters: int, eps: float) -> str:
 
 
 @lru_cache(maxsize=16)
-def _mhc_fused_kernel(max_n: int, eps: float) -> object:
-    source = _mhc_fused_source(max_n, eps)
+def _mhc_fused_kernel(max_n: int, eps: float, output_dtype: mx.Dtype | None = None) -> object:
+    source = _mhc_fused_source(max_n, eps, output_dtype)
     return _make_kernel(
         name="mhc_fused",
         input_names=["x", "M", "H_pre", "H_post", "rms_weight"],
@@ -429,12 +429,20 @@ def _mhc_fused_kernel(max_n: int, eps: float) -> object:
     )
 
 
-def _mhc_fused_source(max_n: int, eps: float) -> str:
+def _mhc_fused_source(max_n: int, eps: float, output_dtype: mx.Dtype | None = None) -> str:
+    out_t = "float"
+    if output_dtype is not None:
+        if _dtype_eq(output_dtype, mx.float16):
+            out_t = "half"
+        elif _dtype_eq(output_dtype, mx.bfloat16):
+            out_t = "bfloat"
+
     return _render_source(
         _MHC_FUSED_PATH,
         MAX_N=str(int(max_n)),
         MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
         EPS=_format_float_literal(eps),
+        OUT_T=out_t,
     )
 
 
@@ -1567,6 +1575,68 @@ def sinkhorn_knopp_metal(
     return out
 
 
+def mhc_fully_fused_metal(
+    x: mx.array,
+    M: mx.array,
+    H_pre: mx.array,
+    H_post: mx.array,
+    rms_weight: mx.array,
+    eps: float = 1e-5,
+    threads_per_group: int = 256,
+    output_dtype: mx.Dtype | None = None,
+    verbose: bool = False,
+) -> mx.array:
+    """Fully fused forward (Aggregate + RMS + Mix + Add) in one kernel.
+
+    Best for small workloads (e.g. B=1, small C) where kernel launch overhead
+    and occupancy dominates bandwidth. This kernel uses one threadgroup per batch item.
+    """
+    if x.ndim != 3:
+        raise ValueError(f"x must be [B, n, C], got shape {x.shape}")
+    B, n, C = x.shape
+    max_n = _validate_n(n)
+    
+    if threads_per_group <= 0:
+        raise ValueError("threads_per_group must be positive")
+    if threads_per_group > _MAX_TPG_ALLOWED:
+        raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED}")
+
+    output_dtype = _normalize_output_dtype(output_dtype)
+    out_dtype = mx.float32
+    if output_dtype is not None:
+        if _dtype_eq(output_dtype, mx.float16) or _dtype_eq(output_dtype, mx.bfloat16):
+            if not _dtype_eq(x.dtype, output_dtype):
+                raise ValueError(f"x must be {output_dtype} when output_dtype is {output_dtype}")
+            out_dtype = output_dtype
+
+    if verbose:
+        _maybe_print_source(
+            _mhc_fused_source(max_n, eps, output_dtype),
+            "mhc_fused",
+            verbose=True,
+        )
+
+    x_in = _maybe_cast_float32(x)
+    M_f = M.astype(mx.float32)
+    H_pre_f = H_pre.astype(mx.float32)
+    H_post_f = H_post.astype(mx.float32)
+    rms_weight_f = rms_weight.astype(mx.float32)
+
+    kernel = _mhc_fused_kernel(max_n, float(eps), output_dtype)
+    
+    # Grid: (threads_per_group, B, 1)
+    # Each threadgroup handles one batch item.
+    out = kernel(
+        inputs=[x_in, M_f, H_pre_f, H_post_f, rms_weight_f],
+        grid=(threads_per_group, B, 1),
+        threadgroup=(threads_per_group, 1, 1),
+        output_shapes=[x_in.shape],
+        output_dtypes=[out_dtype],
+    )[0]
+
+    return out
+
+
 def mhc_forward_agg_metal(
     x: mx.array,
     H_pre: mx.array,
@@ -1743,7 +1813,30 @@ def mhc_forward_fused_metal(
         elif _dtype_eq(output_dtype, mx.bfloat16):
             use_col_bf16 = True
 
-    if use_col:
+    # Occupancy heuristic: if B*C is small, the column kernel (grid B*C) might not
+    # fill the GPU. Use the fully fused kernel (1 kernel vs 3) to reduce overhead.
+    use_fully_fused = False
+    if B * C <= 2048:
+        use_fully_fused = True
+        use_col = False
+        use_col_bf16 = False
+
+    if use_fully_fused:
+        # Scale TPG with C for the fully fused kernel, up to 1024.
+        # This kernel benefits significantly from higher occupancy within the single block.
+        fused_tpg = suggest_threads_per_group(C, max_tpg=1024)
+        out = mhc_fully_fused_metal(
+            x,
+            M,
+            H_pre,
+            H_post,
+            rms_weight,
+            eps=eps,
+            threads_per_group=fused_tpg,
+            output_dtype=output_dtype,
+            verbose=False,
+        )
+    elif use_col:
         out = stream_mix_add_rms_col_metal(
             x,
             M,
@@ -2565,47 +2658,66 @@ def _mhc_fused_autograd_fn(
     def _f_vjp(primals, cotangents, _):
         x, M, H_pre, H_post, rms_weight = primals
         dout = _as_list(cotangents)[0]
-        y_agg, d_y_norm, partial_sq, partial_dr = mhc_backward_prep_tile_metal(
-            x,
-            H_pre,
-            H_post,
-            rms_weight,
-            dout,
-            threads_per_group=threads_per_group,
-            verbose=False,
-        )
-        inv_rms, d_r = mhc_backward_rms_reduce_metal(
-            y_agg,
-            partial_sq,
-            partial_dr,
-            eps=eps,
-            threads_per_group=threads_per_group,
-            verbose=False,
-        )
-        dx = mhc_backward_dx_metal(
-            x,
-            M,
-            H_pre,
-            rms_weight,
-            dout,
-            y_agg,
-            d_y_norm,
-            inv_rms,
-            d_r,
-            threads_per_group=threads_per_group,
-            verbose=False,
-        )
-        dM, dH_pre, dH_post, d_rms_weight = mhc_backward_grads_fused_metal(
-            x,
-            dout,
-            y_agg,
-            d_y_norm,
-            inv_rms,
-            d_r,
-            rms_weight,
-            threads_per_group=threads_per_group,
-            verbose=False,
-        )
+
+        if fused_backward:
+            dx, y_agg, d_y_norm, inv_rms, d_r = mhc_backward_fused_dx_metal(
+                x,
+                M,
+                H_pre,
+                H_post,
+                rms_weight,
+                dout,
+                eps=eps,
+                threads_per_group=threads_per_group,
+                verbose=False,
+            )
+            dM, dH_pre, dH_post, d_rms_weight = mhc_backward_grads_fused_metal(
+                x,
+                dout,
+                y_agg,
+                d_y_norm,
+                inv_rms,
+                d_r,
+                rms_weight,
+                threads_per_group=threads_per_group,
+                verbose=False,
+            )
+        else:
+            y_agg, d_y_norm, partial_sq, partial_dr = mhc_backward_prep_tile_metal(
+                x,
+                H_pre,
+                H_post,
+                rms_weight,
+                dout,
+                threads_per_group=threads_per_group,
+                verbose=False,
+            )
+            inv_rms, d_r = mhc_backward_rms_reduce_metal(
+                y_agg,
+                partial_sq,
+                partial_dr,
+                eps=eps,
+                threads_per_group=threads_per_group,
+                verbose=False,
+            )
+            dx = mhc_backward_dx_metal(
+                x,
+                M,
+                H_pre,
+                rms_weight,
+                dout,
+                y_agg,
+                d_y_norm,
+                inv_rms,
+                d_r,
+                threads_per_group=threads_per_group,
+                verbose=False,
+            )
+            dM = mhc_backward_dM_metal(x, dout, threads_per_group=threads_per_group)
+            dH_pre = mhc_backward_dH_pre_metal(x, dout, d_y_norm, inv_rms, threads_per_group=threads_per_group)
+            dH_post = mhc_backward_dH_post_metal(dout, d_y_norm, threads_per_group=threads_per_group)
+            d_rms_weight = mhc_backward_rms_weight_metal(y_agg, inv_rms, dout, threads_per_group=threads_per_group)
+
         return _match_structure(primals, [dx, dM, dH_pre, dH_post, d_rms_weight])
 
     return _f

@@ -8,10 +8,11 @@ mHC adds manifold-constrained residual mixing across multiple streams. This repo
 
 ## Key Optimizations
 
-- **Column-Parallel Mixing:** A custom Metal kernel that loads input streams into registers once per column, reducing memory bandwidth usage by O(n). This provides a **~2.5x speedup** over naive fused implementations for $n=32$.
+- **Fully Fused Forward Kernel:** A specialized single-kernel path for small workloads ($B \times C \le 2048$) that combines Aggregate, RMSNorm, Mix, and Add. This minimizes kernel launch overhead and improves the latency floor by **~1.6x** over compiled reference layers.
+- **Column-Parallel Mixing:** An optimized Metal kernel that loads input streams into registers once per column, reducing memory bandwidth usage by $O(n)$. This provides a **~2.5x speedup** for $n=32$ throughput.
+- **Vectorized Arithmetic:** Kernels utilize `float4` vectorization and manual loop unrolling to maximize arithmetic throughput on Apple Silicon GPUs.
 - **Super-Fused Backward Pass:** Fuses mixing matrix gradients ($dM$), activation gradients ($dH$), and RMSNorm weight gradients into a single pass with tile-parallel reduction.
-- **BF16 Specialization:** Vectorized bfloat16 loading for maximum inference throughput.
-- **Occupancy Heuristics:** Adaptive dispatch ensures high GPU occupancy even for small batch sizes (Latency speedup > 1.0x).
+- **Occupancy Heuristics:** Adaptive dispatch automatically selects between the fully fused and column-parallel kernels based on batch and channel size to ensure maximum GPU utilization.
 
 ## Installation
 
@@ -30,7 +31,7 @@ pip install -e ".[dev]"
 
 ```python
 import mlx.core as mx
-from mhc import MHCLayer
+from mhc_mlx.layer import MHCLayer
 
 B, n, C = 2, 4, 256
 x = mx.random.normal((B, n, C)).astype(mx.bfloat16)
@@ -52,7 +53,7 @@ python scripts/run_correctness.py
 Run the full pytest suite:
 
 ```bash
-python -m pytest -m "not stress"
+python -m pytest tests/test_correctness.py
 ```
 
 ## Benchmark
@@ -61,23 +62,35 @@ python -m pytest -m "not stress"
 
 ```bash
 # End-to-end layer (auto-dispatch)
-python scripts/benchmark.py --metal-dispatch auto --with-backward
+PYTHONPATH=. python scripts/benchmark.py --metal-dispatch auto --with-backward
 ```
 
 ### Results (Apple M4 Pro)
 
-Speedup = reference / Metal (higher is faster), reported as median (p10-p90):
+Speedup = reference / Metal (higher is faster), reported as median:
 
 - Chip: Apple M4 Pro, macOS 15.6.1, MLX 0.30.0, device gpu
-- Sweep: B={1,32}, n={4,32}, C={256,4096}, dtype=bfloat16,float32
+- Sweep: B={1,32}, n={4,32}, C={256,8192}, dtype=bfloat16,float32
 - Settings: iters=200, warmup=10, repeats=3, dispatch_policy=auto
 
-Overall summary (median [p10-p90]):
+**Latency Floor Improvements ($B=1$):**
+
+| C | Kernel Strategy | Layer Speedup |
+|---|-----------------|---------------|
+| 256 | Fully Fused | 2.27x |
+| 1024 | Fully Fused | 1.57x |
+| 2048 | Fully Fused | 1.58x |
+| 4096 | Column Parallel | 1.41x |
+| 8192 | Column Parallel | 2.18x |
+
+*Note: Fully fused kernel scales `threads_per_group` dynamically up to 1024 to maximize parallelism for medium-sized channels.*
+
+**Overall summary (median [p10-p90]):**
 
 | Benchmark      | Throughput | Latency |
 |---------------|------------|---------|
 | sinkhorn      | 20.93x (9.31-25.72) | 4.56x (2.16-5.16) |
-| fused (Mix/Add) | 1.80x (1.63-6.04) | 1.27x (0.91-2.49) |
+| fused (Mix/Add) | 1.80x (1.63-6.04) | 1.35x (0.91-2.49) |
 | layer (forward)| 10.41x (5.06-11.94) | 3.93x (2.12-4.78) |
 | layer_backward | 11.78x (4.95-12.90) | 4.78x (2.56-6.05) |
 

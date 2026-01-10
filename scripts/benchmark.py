@@ -400,7 +400,7 @@ def _run_case(
     )
     use_ref_fallback = use_auto_dispatch and avoid_fused and not use_hybrid
     use_fused_metal = not use_hybrid and not use_ref_fallback
-    fused_backward_effective = False
+    fused_backward_effective = bool(args.fused_backward)
     dispatch_path = "fused_metal"
     if use_ref_fallback:
         dispatch_path = "reference"

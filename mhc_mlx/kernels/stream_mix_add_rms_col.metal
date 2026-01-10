@@ -47,34 +47,36 @@ for (uint idx = lane; idx < uint(n); idx += threads_per_threadgroup.x) {
 }
 threadgroup_barrier(mem_flags::mem_threadgroup);
 
-// Load input column x[b, :, c] into registers
-float x_col[MAX_N];
-uint base_x = uint(b) * uint(n) * uint(C) + c;
-uint stride_x = uint(C);
+uint base_token = b * uint(n) * uint(C);
+uint base_token_y = b * uint(C);
+float inv_rms_val = inv_rms[b];
 
-for (int j = 0; j < n; ++j) {
-    x_col[j] = float(x[base_x + uint(j) * stride_x]);
+// Load x column into registers
+float x_col[MAX_N];
+for (int i = 0; i < n; ++i) {
+    x_col[i] = float(x[base_token + uint(i) * uint(C) + c]);
 }
 
-// Precompute y_dist scalar part
-// y_norm = y_agg[b,c] * inv_rms[b] * rms_weight[c]
-uint idx_bc = uint(b) * uint(C) + c;
-float y_norm_scalar = float(y_agg[idx_bc]) * float(inv_rms[b]) * float(rms_weight[c]);
+float y_val = y_agg[base_token_y + c];
+float y_n = y_val * inv_rms_val * float(rms_weight[c]);
 
-// Compute Mix + Add
-// out[i] = dot(M[i, :], x_col) + H_post[i] * y_norm_scalar
+// Compute M * x_col + H_post * y_norm
 for (int i = 0; i < n; ++i) {
-    float acc = 0.0f;
+    float acc0 = 0.0f;
+    float acc1 = 0.0f;
     int row_offset = i * n;
     
-    // Matrix-vector dot product
-    for (int j = 0; j < n; ++j) {
-        acc += Ms[row_offset + j] * x_col[j];
+    // Unroll 2x (8 elements per step) for ILP
+    for (int j = 0; j < n; j += 8) {
+        float4 m_vec0 = float4(Ms[row_offset + j], Ms[row_offset + j + 1], Ms[row_offset + j + 2], Ms[row_offset + j + 3]);
+        float4 x_vec0 = float4(x_col[j], x_col[j + 1], x_col[j + 2], x_col[j + 3]);
+        acc0 += dot(m_vec0, x_vec0);
+
+        float4 m_vec1 = float4(Ms[row_offset + j + 4], Ms[row_offset + j + 5], Ms[row_offset + j + 6], Ms[row_offset + j + 7]);
+        float4 x_vec1 = float4(x_col[j + 4], x_col[j + 5], x_col[j + 6], x_col[j + 7]);
+        acc1 += dot(m_vec1, x_vec1);
     }
     
-    // Add distributed branch
-    float val = acc + Hpost[i] * y_norm_scalar;
-    
-    // Store result
-    out[base_x + uint(i) * stride_x] = val;
+    out[base_token + uint(i) * uint(C) + c] = (acc0 + acc1) + Hpost[i] * y_n;
 }
+
