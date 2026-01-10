@@ -26,6 +26,8 @@ _STREAM_MIX_ADD_RMS_TILE2D_BF16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add
 _STREAM_MIX_ADD_RMS_TILE_F32_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_tile_f32.metal")
 _STREAM_MIX_ADD_RMS_TILE_FP16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_tile_fp16.metal")
 _STREAM_MIX_ADD_RMS_TILE_BF16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_tile_bf16.metal")
+_STREAM_MIX_ADD_RMS_COL_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_col.metal")
+_STREAM_MIX_ADD_RMS_COL_BF16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_col_bf16.metal")
 _SINKHORN_PATH = os.path.join(_KERNEL_DIR, "sinkhorn_knopp.metal")
 _SINKHORN_BACKWARD_PATH = os.path.join(_KERNEL_DIR, "sinkhorn_knopp_backward.metal")
 _MHC_FUSED_PATH = os.path.join(_KERNEL_DIR, "mhc_fused.metal")
@@ -35,6 +37,8 @@ _MHC_FORWARD_RMS_REDUCE_PATH = os.path.join(_KERNEL_DIR, "mhc_forward_rms_reduce
 _MHC_BACKWARD_PREP_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_prep.metal")
 _MHC_BACKWARD_PREP_TILE_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_prep_tile.metal")
 _MHC_BACKWARD_DX_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dx.metal")
+_MHC_BACKWARD_DX_COL_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dx_col.metal")
+_MHC_BACKWARD_GRADS_FUSED_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_grads_fused.metal")
 _MHC_BACKWARD_FUSED_DX_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_fused_dx.metal")
 _MHC_BACKWARD_DM_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dM.metal")
 _MHC_BACKWARD_DH_PRE_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dH_pre.metal")
@@ -289,6 +293,44 @@ def _stream_mix_add_rms_tile2d_bf16_kernel(max_n: int) -> object:
 def _stream_mix_add_rms_tile2d_bf16_source(max_n: int) -> str:
     return _render_source(
         _STREAM_MIX_ADD_RMS_TILE2D_BF16_PATH,
+        MAX_N=str(int(max_n)),
+    )
+
+
+@lru_cache(maxsize=8)
+def _stream_mix_add_rms_col_kernel(max_n: int) -> object:
+    source = _stream_mix_add_rms_col_source(max_n)
+    return _make_kernel(
+        name="stream_mix_add_rms_col",
+        input_names=["x", "M", "H_post", "y_agg", "inv_rms", "rms_weight"],
+        output_names=["out"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _stream_mix_add_rms_col_source(max_n: int) -> str:
+    return _render_source(
+        _STREAM_MIX_ADD_RMS_COL_PATH,
+        MAX_N=str(int(max_n)),
+    )
+
+
+@lru_cache(maxsize=8)
+def _stream_mix_add_rms_col_bf16_kernel(max_n: int) -> object:
+    source = _stream_mix_add_rms_col_bf16_source(max_n)
+    return _make_kernel(
+        name="stream_mix_add_rms_col_bf16",
+        input_names=["x", "M", "H_post", "y_agg", "inv_rms", "rms_weight"],
+        output_names=["out"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _stream_mix_add_rms_col_bf16_source(max_n: int) -> str:
+    return _render_source(
+        _STREAM_MIX_ADD_RMS_COL_BF16_PATH,
         MAX_N=str(int(max_n)),
     )
 
@@ -569,6 +611,66 @@ def _mhc_backward_dx_source(max_n: int) -> str:
 
 
 @lru_cache(maxsize=16)
+def _mhc_backward_dx_col_kernel(max_n: int) -> object:
+    source = _mhc_backward_dx_col_source(max_n)
+    return _make_kernel(
+        name="mhc_backward_dx_col",
+        input_names=[
+            "x",
+            "M",
+            "H_pre",
+            "rms_weight",
+            "d_out",
+            "y_agg",
+            "d_y_norm",
+            "inv_rms",
+            "d_r",
+        ],
+        output_names=["dx"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _mhc_backward_dx_col_source(max_n: int) -> str:
+    return _render_source(
+        _MHC_BACKWARD_DX_COL_PATH,
+        MAX_N=str(int(max_n)),
+    )
+
+
+@lru_cache(maxsize=16)
+def _mhc_backward_grads_fused_kernel(max_n: int) -> object:
+    source = _mhc_backward_grads_fused_source(max_n)
+    return _make_kernel(
+        name="mhc_backward_grads_fused",
+        input_names=[
+            "x",
+            "d_out",
+            "y_agg",
+            "d_y_norm",
+            "inv_rms",
+            "d_r",
+            "rms_weight",
+            "dM",
+            "dH_pre",
+            "dH_post",
+            "d_rms_weight",
+        ],
+        output_names=["dummy_out"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _mhc_backward_grads_fused_source(max_n: int) -> str:
+    return _render_source(
+        _MHC_BACKWARD_GRADS_FUSED_PATH,
+        MAX_N=str(int(max_n)),
+    )
+
+
+@lru_cache(maxsize=16)
 def _mhc_backward_fused_dx_kernel(max_n: int, eps: float) -> object:
     source = _mhc_backward_fused_dx_source(max_n, eps)
     return _make_kernel(
@@ -745,7 +847,7 @@ def _normalize_output_dtype(output_dtype: mx.Dtype | None) -> mx.Dtype | None:
 
 def _normalize_mix_kernel(mix_kernel: str) -> str:
     key = (mix_kernel or "auto").strip().lower()
-    if key in {"auto", "1d", "2d"}:
+    if key in {"auto", "1d", "2d", "col"}:
         return key
     raise ValueError(f"unsupported mix_kernel: {mix_kernel}")
 
@@ -1105,6 +1207,100 @@ def stream_mix_add_rms_metal(
         output_dtypes=[out_dtype],
     )[0]
 
+    return out
+
+
+def stream_mix_add_rms_col_metal(
+    x: mx.array,
+    M: mx.array,
+    H_post: mx.array,
+    y_agg: mx.array,
+    inv_rms: mx.array,
+    rms_weight: mx.array,
+    threads_per_group: int = 256,
+    verbose: bool = False,
+) -> mx.array:
+    """Column-parallel stream mix add + RMS (thread per column)."""
+    if x.ndim != 3:
+        raise ValueError(f"x must be [B, n, C], got shape {x.shape}")
+    B, n, C = x.shape
+    max_n = _validate_n(n)
+    
+    if threads_per_group <= 0:
+        raise ValueError("threads_per_group must be positive")
+    tpg = int(threads_per_group)
+
+    if verbose:
+        _maybe_print_source(
+            _stream_mix_add_rms_col_source(max_n),
+            "stream_mix_add_rms_col",
+            verbose=True,
+        )
+
+    x_in = _maybe_cast_float32(x)
+    M_f = M.astype(mx.float32)
+    H_post_f = H_post.astype(mx.float32)
+    y_agg_f = y_agg.astype(mx.float32)
+    inv_rms_f = inv_rms.astype(mx.float32)
+    rms_weight_f = rms_weight.astype(mx.float32)
+
+    kernel = _stream_mix_add_rms_col_kernel(max_n)
+    out = kernel(
+        inputs=[x_in, M_f, H_post_f, y_agg_f, inv_rms_f, rms_weight_f],
+        grid=(C, B, 1),
+        threadgroup=(tpg, 1, 1),
+        output_shapes=[(B, n, C)],
+        output_dtypes=[mx.float32],
+    )[0]
+    return out
+
+
+def stream_mix_add_rms_col_bf16_metal(
+    x: mx.array,
+    M: mx.array,
+    H_post: mx.array,
+    y_agg: mx.array,
+    inv_rms: mx.array,
+    rms_weight: mx.array,
+    threads_per_group: int = 256,
+    verbose: bool = False,
+) -> mx.array:
+    """Column-parallel stream mix add + RMS for BF16 (thread per 2 columns)."""
+    if x.ndim != 3:
+        raise ValueError(f"x must be [B, n, C], got shape {x.shape}")
+    B, n, C = x.shape
+    max_n = _validate_n(n)
+    
+    if threads_per_group <= 0:
+        raise ValueError("threads_per_group must be positive")
+    tpg = int(threads_per_group)
+
+    if verbose:
+        _maybe_print_source(
+            _stream_mix_add_rms_col_bf16_source(max_n),
+            "stream_mix_add_rms_col_bf16",
+            verbose=True,
+        )
+
+    # x is bfloat16, pass as is
+    M_f = M.astype(mx.float32)
+    H_post_f = H_post.astype(mx.float32)
+    y_agg_f = y_agg.astype(mx.float32)
+    inv_rms_f = inv_rms.astype(mx.float32)
+    rms_weight_f = rms_weight.astype(mx.float32)
+
+    kernel = _stream_mix_add_rms_col_bf16_kernel(max_n)
+    
+    # Grid: ceil(C/2) threads
+    grid_x = (C + 1) // 2
+    
+    out = kernel(
+        inputs=[x, M_f, H_post_f, y_agg_f, inv_rms_f, rms_weight_f],
+        grid=(grid_x, B, 1),
+        threadgroup=(tpg, 1, 1),
+        output_shapes=[(B, n, C)],
+        output_dtypes=[mx.bfloat16],
+    )[0]
     return out
 
 
@@ -1532,18 +1728,56 @@ def mhc_forward_fused_metal(
         verbose=False,
     )
 
-    out = stream_mix_add_rms_metal(
-        x,
-        M,
-        H_post,
-        y_agg,
-        inv_rms,
-        rms_weight,
-        threads_per_group=threads_per_group,
-        output_dtype=output_dtype,
-        mix_kernel=mix_kernel,
-        verbose=False,
-    )
+    use_col = False
+    use_col_bf16 = False
+    normalized_mix = _normalize_mix_kernel(mix_kernel)
+    if normalized_mix == "col":
+        if _dtype_eq(output_dtype, mx.bfloat16):
+            use_col_bf16 = True
+        else:
+            use_col = True
+    elif normalized_mix == "auto":
+        # Use col kernel if output_dtype is None/float32
+        if output_dtype is None or _dtype_eq(output_dtype, mx.float32):
+            use_col = True
+        elif _dtype_eq(output_dtype, mx.bfloat16):
+            use_col_bf16 = True
+
+    if use_col:
+        out = stream_mix_add_rms_col_metal(
+            x,
+            M,
+            H_post,
+            y_agg,
+            inv_rms,
+            rms_weight,
+            threads_per_group=threads_per_group,
+            verbose=False,
+        )
+    elif use_col_bf16:
+        out = stream_mix_add_rms_col_bf16_metal(
+            x,
+            M,
+            H_post,
+            y_agg,
+            inv_rms,
+            rms_weight,
+            threads_per_group=threads_per_group,
+            verbose=False,
+        )
+    else:
+        out = stream_mix_add_rms_metal(
+            x,
+            M,
+            H_post,
+            y_agg,
+            inv_rms,
+            rms_weight,
+            threads_per_group=threads_per_group,
+            output_dtype=output_dtype,
+            mix_kernel=mix_kernel,
+            verbose=False,
+        )
 
     return out
 
@@ -1780,7 +2014,7 @@ def mhc_backward_dx_metal(
         raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED}")
 
     if verbose:
-        _maybe_print_source(_mhc_backward_dx_source(max_n), "mhc_backward_dx", True)
+        _maybe_print_source(_mhc_backward_dx_col_source(max_n), "mhc_backward_dx_col", True)
 
     x_in = _maybe_cast_float32(x)
     d_out_in = _maybe_cast_float32(d_out)
@@ -1792,10 +2026,10 @@ def mhc_backward_dx_metal(
     inv_rms_f = inv_rms.astype(mx.float32)
     d_r_f = d_r.astype(mx.float32)
 
-    kernel = _mhc_backward_dx_kernel(max_n)
+    kernel = _mhc_backward_dx_col_kernel(max_n)
     out = kernel(
         inputs=[x_in, M_f, H_pre_f, rms_weight_f, d_out_in, y_agg_f, d_y_norm_f, inv_rms_f, d_r_f],
-        grid=(C, B * n, 1),
+        grid=(C, B, 1),
         threadgroup=(threads_per_group, 1, 1),
         output_shapes=[x_in.shape],
         output_dtypes=[mx.float32],
@@ -2105,6 +2339,72 @@ def mhc_backward_drms_weight_metal(
     return out
 
 
+def mhc_backward_grads_fused_metal(
+    x: mx.array,
+    d_out: mx.array,
+    y_agg: mx.array,
+    d_y_norm: mx.array,
+    inv_rms: mx.array,
+    d_r: mx.array,
+    rms_weight: mx.array,
+    threads_per_group: int = 256,
+    verbose: bool = False,
+) -> tuple[mx.array, mx.array, mx.array, mx.array]:
+    """Compute dM, dH_pre, dH_post, d_rms_weight in one fused pass."""
+    if x.ndim != 3:
+        raise ValueError(f"x must be [B, n, C], got {x.shape}")
+    B, n, C = x.shape
+    
+    # Fallback for n != 32 (only n=32 is optimized for now)
+    if n != 32:
+        dM = mhc_backward_dM_metal(x, d_out, threads_per_group, verbose)
+        dH_pre, dH_post = mhc_backward_dH_pre_post_metal(
+            x, d_out, y_agg, d_y_norm, inv_rms, d_r, rms_weight, threads_per_group, verbose
+        )
+        d_rms = mhc_backward_drms_weight_metal(y_agg, d_y_norm, inv_rms, threads_per_group, verbose)
+        return dM, dH_pre, dH_post, d_rms
+
+    if verbose:
+        _maybe_print_source(
+            _mhc_backward_grads_fused_source(n),
+            "mhc_backward_grads_fused",
+            verbose=True,
+        )
+
+    # Initialize accumulators
+    dM = mx.zeros((n, n), dtype=mx.float32)
+    dH_pre = mx.zeros((n,), dtype=mx.float32)
+    dH_post = mx.zeros((n,), dtype=mx.float32)
+    d_rms = mx.zeros((C,), dtype=mx.float32)
+
+    x_in = _maybe_cast_float32(x)
+    dout_in = _maybe_cast_float32(d_out)
+    y_agg_f = y_agg.astype(mx.float32)
+    dy_f = d_y_norm.astype(mx.float32)
+    inv_f = inv_rms.astype(mx.float32)
+    dr_f = d_r.astype(mx.float32)
+    rw_f = rms_weight.astype(mx.float32)
+
+    kernel = _mhc_backward_grads_fused_kernel(n)
+    
+    # Launch with 1024 threadgroups of size 32
+    num_groups = 1024
+    tpg = 32
+    
+    kernel(
+        inputs=[
+            x_in, dout_in, y_agg_f, dy_f, inv_f, dr_f, rw_f,
+            dM, dH_pre, dH_post, d_rms
+        ],
+        grid=(num_groups * tpg, 1, 1),
+        threadgroup=(tpg, 1, 1),
+        output_shapes=[(1,)],
+        output_dtypes=[mx.float32],
+    )
+    
+    return dM, dH_pre, dH_post, d_rms
+
+
 def stream_mix_backward_dx_metal(
     M: mx.array,
     d_out: mx.array,
@@ -2295,13 +2595,7 @@ def _mhc_fused_autograd_fn(
             threads_per_group=threads_per_group,
             verbose=False,
         )
-        dM = mhc_backward_dM_metal(
-            x,
-            dout,
-            threads_per_group=threads_per_group,
-            verbose=False,
-        )
-        dH_pre, dH_post = mhc_backward_dH_pre_post_metal(
+        dM, dH_pre, dH_post, d_rms_weight = mhc_backward_grads_fused_metal(
             x,
             dout,
             y_agg,
@@ -2309,13 +2603,6 @@ def _mhc_fused_autograd_fn(
             inv_rms,
             d_r,
             rms_weight,
-            threads_per_group=threads_per_group,
-            verbose=False,
-        )
-        d_rms_weight = mhc_backward_drms_weight_metal(
-            y_agg,
-            d_y_norm,
-            inv_rms,
             threads_per_group=threads_per_group,
             verbose=False,
         )
