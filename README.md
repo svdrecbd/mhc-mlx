@@ -79,6 +79,20 @@ We benchmarked on an Apple M4 Pro (macOS 15.6). `mhc-mlx` outperforms standard i
 - **Column-Parallel Mixing:** Vectorized kernel maximizing throughput for larger workloads.
 - **Adaptive Dispatch:** Runtime heuristic selects the fastest kernel strategy.
 
+## Advanced Usage
+
+### Custom Blocks: Fused Residual Add + Aggregate
+
+If you are building custom Transformer blocks, you can use `residual_add_agg` to fuse the residual connection with the mHC aggregation step. This saves a full memory read/write round-trip (~1.4x speedup).
+
+```python
+from mhc_mlx import residual_add_agg
+
+# Standard: x = x + res; y_agg = aggregate(x)
+# Fused:
+x, y_agg = residual_add_agg(x, res, H_pre)
+```
+
 ## Troubleshooting
 
 Run diagnostics to check your environment:

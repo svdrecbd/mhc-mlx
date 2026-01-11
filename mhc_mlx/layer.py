@@ -406,31 +406,21 @@ class MHCRewire(nn.Module):
 
         # Get learnable scales and mixing matrix
         H_pre_act, H_post_act = activate_pre_post(self.mhc.H_pre_raw, self.mhc.H_post_raw)
-        M = self.mhc.mixing_matrix()
+        
+        # 1. Pre-scale (H_pre * x)
+        # Note: Apply scaling before the inner layer. MLX will fuse this 
+        # with the following Linear layer's dot product.
+        h_pre_expanded = mx.repeat(H_pre_act, C)
+        x_pre = x * h_pre_expanded
+        
+        # 2. Inner Module F(H_pre * x)
+        y_inner = self.inner(x_pre)
 
-        # OPTIMIZATION: Weight Folding
-        if isinstance(self.inner, nn.Linear):
-            # Folding logic: H_pre is applied to x, then @ weight
-            # Equivalent to x @ (weight * H_pre_expanded)
-            h_pre_expanded = mx.repeat(H_pre_act, C)
-            x_pre = x * h_pre_expanded
-            y_inner = self.inner(x_pre)
-        else:
-            # Fallback: explicit multiply
-            x_reshaped = x.reshape(-1, self.n, C)
-            x_pre = x_reshaped * H_pre_act.reshape(1, self.n, 1)
-            y_inner = self.inner(x_pre.reshape(x.shape))
-
-        # OPTIMIZATION: Residual Folding + Post-Combine
-        # H_post * (y_inner + (M * H_pre) @ x)
+        # 3. Post-Combine: H_post * (y_inner + (M * H_pre) @ x)
         x_reshaped = x.reshape(-1, self.n, C)
         y_inner_reshaped = y_inner.reshape(-1, self.n, C)
         
-        # M_final folds H_pre into the mixing matrix
-        M_final = M * H_pre_act.reshape(1, -1)
-        
-        # Perform mix + add
-        x_mixed = mx.einsum('ij,...jd->...id', M_final, x_reshaped)
-        out = (y_inner_reshaped + x_mixed) * H_post_act.reshape(1, self.n, 1)
+        # Use our optimized Metal kernel for the post-combine step
+        out = self.mhc.post_combine(x_reshaped, y_inner_reshaped)
         
         return out.reshape(x.shape)

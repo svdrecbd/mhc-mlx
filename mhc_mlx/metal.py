@@ -47,6 +47,7 @@ _MHC_BACKWARD_DH_PRE_POST_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dH_pre_
 _MHC_BACKWARD_DRMS_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_d_rms_weight.metal")
 _MHC_BACKWARD_RMS_REDUCE_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_rms_reduce.metal")
 _STREAM_MIX_BACKWARD_DX_PATH = os.path.join(_KERNEL_DIR, "stream_mix_backward_dx.metal")
+_RESIDUAL_ADD_AGG_PATH = os.path.join(_KERNEL_DIR, "residual_add_agg.metal")
 
 _MAX_N_ALLOWED = 64
 _MAX_TPG_ALLOWED = 1024
@@ -1635,6 +1636,91 @@ def mhc_fully_fused_metal(
     )[0]
 
     return out
+
+
+@lru_cache(maxsize=16)
+def _residual_add_agg_kernel(max_n: int, output_dtype: mx.Dtype | None = None) -> object:
+    source = _residual_add_agg_source(max_n, output_dtype)
+    return _make_kernel(
+        name="residual_add_agg",
+        input_names=["x", "res", "H_pre"],
+        output_names=["out", "y_agg"],
+        source=source,
+        ensure_row_contiguous=True,
+    )
+
+
+def _residual_add_agg_source(max_n: int, output_dtype: mx.Dtype | None = None) -> str:
+    out_t = "float"
+    if output_dtype is not None:
+        if _dtype_eq(output_dtype, mx.float16):
+            out_t = "half"
+        elif _dtype_eq(output_dtype, mx.bfloat16):
+            out_t = "bfloat"
+
+    return _render_source(
+        _RESIDUAL_ADD_AGG_PATH,
+        MAX_N=str(int(max_n)),
+        OUT_T=out_t,
+    )
+
+
+def residual_add_agg_metal(
+    x: mx.array,
+    res: mx.array,
+    H_pre: mx.array,
+    threads_per_group: int = 256,
+    output_dtype: mx.Dtype | None = None,
+    verbose: bool = False,
+) -> tuple[mx.array, mx.array]:
+    """Fused residual add + aggregate.
+    
+    Computes:
+    out = x + res
+    y_agg = sum(out * H_pre)
+    """
+    if x.ndim != 3:
+        raise ValueError(f"x must be [B, n, C], got shape {x.shape}")
+    if res.shape != x.shape:
+        raise ValueError(f"res must match x shape, got {res.shape} vs {x.shape}")
+    B, n, C = x.shape
+    max_n = _validate_n(n)
+    
+    if threads_per_group <= 0:
+        raise ValueError("threads_per_group must be positive")
+    
+    output_dtype = _normalize_output_dtype(output_dtype)
+    out_dtype = mx.float32
+    if output_dtype is not None:
+        out_dtype = output_dtype
+
+    if verbose:
+        _maybe_print_source(
+            _residual_add_agg_source(max_n, output_dtype),
+            "residual_add_agg",
+            verbose=True,
+        )
+
+    x_in = _maybe_cast_float32(x)
+    res_in = _maybe_cast_float32(res)
+    H_pre_in = H_pre.astype(mx.float32)
+
+    kernel = _residual_add_agg_kernel(max_n, output_dtype)
+    
+    # Grid: (C, B, 1). Each thread handles one column (or 4 if vectorized).
+    grid_c = C
+    if (C % 4) == 0:
+        grid_c = C // 4
+
+    out, y_agg = kernel(
+        inputs=[x_in, res_in, H_pre_in],
+        grid=(grid_c, B, 1),
+        threadgroup=(threads_per_group, 1, 1),
+        output_shapes=[x_in.shape, (B, C)],
+        output_dtypes=[out_dtype, mx.float32],
+    )
+
+    return out, y_agg
 
 
 def mhc_forward_agg_metal(
