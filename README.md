@@ -16,21 +16,33 @@ pip install mhc-mlx
 
 ## Quick Start
 
+### Option 1: Drop-in Layer
+Use `MHCLayer` as a replacement for standard residual blocks.
+
 ```python
 import mlx.core as mx
 from mhc_mlx import MHCLayer
 
-# Create some dummy data
-B, n, C = 1, 32, 2048
-x = mx.random.normal((B, n, C)).astype(mx.bfloat16)
-
-# Initialize layer (uses Metal kernels by default)
-layer = MHCLayer(n=n, C=C)
+# Initialize layer
+layer = MHCLayer(n=32, C=64) # 32 streams, 64 channels each
 
 # Forward pass
+x = mx.random.normal((1, 32, 64))
 y = layer(x)
-mx.eval(y)
-print(y.shape)  # (1, 32, 2048)
+```
+
+### Option 2: Universal Wrapper (MHCRewire)
+Enhance **any** existing MLX module with manifold-constrained stability.
+
+```python
+import mlx.nn as nn
+from mhc_mlx import MHCRewire
+
+# Wrap a standard Linear layer (or a whole Transformer block)
+layer = MHCRewire(nn.Linear(512, 512), n=16)
+
+x = mx.random.normal((1, 512))
+y = layer(x) # Computes: H_post * (Linear(H_pre * x) + M * H_pre * x)
 ```
 
 **Note:** You can also import as `mlx_mhc` if you prefer the style of other community packages:
