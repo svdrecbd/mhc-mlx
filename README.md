@@ -44,7 +44,7 @@ We benchmarked on an Apple M4 Pro (macOS 15.6). `mhc-mlx` automatically selects 
 
 ### Head-to-Head: mhc-mlx vs mlx-mhc
 
-| Scenario | mhc-mlx (ours) | mlx-mhc (other) | Speedup |
+| Scenario | mhc-mlx | mlx-mhc | Speedup |
 |---|---|---|---|
 | **Latency** ($B=1, C=512$) | **456.67 us** | 966.17 us | **2.12x** |
 | **Throughput** ($B=1, C=512$) | **85.56 us** | 804.49 us | **9.40x** |
