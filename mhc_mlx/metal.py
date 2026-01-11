@@ -2523,18 +2523,31 @@ def stream_mix_backward_dx_metal(
     if verbose:
         _maybe_print_source(_stream_mix_backward_dx_source(max_n), "stream_mix_backward_dx", True)
 
-    M_f = M.astype(mx.float32)
+        M_f = M.astype(mx.float32)
 
-    kernel = _stream_mix_backward_dx_kernel(max_n)
-    out = kernel(
-        inputs=[M_f, d_out_in],
-        grid=(C, B * n, 1),
-        threadgroup=(threads_per_group, 1, 1),
-        output_shapes=[d_out_in.shape],
-        output_dtypes=[mx.float32],
-    )[0]
+        d_out_f = d_out.astype(mx.float32)
 
-    return out
+    
+
+        kernel = _stream_mix_backward_dx_kernel(max_n)
+
+        out = kernel(
+
+            inputs=[M_f, d_out_f],
+
+            grid=(C, B, 1),
+
+            threadgroup=(threads_per_group, 1, 1),
+
+            output_shapes=[d_out_f.shape],
+
+            output_dtypes=[mx.float32],
+
+        )[0]
+
+        return out
+
+    
 
 
 @lru_cache(maxsize=32)
@@ -2565,7 +2578,8 @@ def _stream_mix_add_autograd_fn(threads_per_group: int):
             threads_per_group=threads_per_group,
             verbose=False,
         )
-        return _match_structure(primals, [dx, dM, dout])
+        # y_dist gradient is just dout since its addition
+        return dx, dM, dout
 
     return _f
 

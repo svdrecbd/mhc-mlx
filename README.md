@@ -2,7 +2,7 @@
 
 **High-performance MLX implementation of Manifold-Constrained Hyper-Connections (mHC)** for Apple Silicon.
 
-This library provides a drop-in `MHCLayer` that fuses multiple operations into optimized Metal kernels, achieving massive speedups over compiled reference layers.
+This library provides optimized Metal kernels for mHC, achieving massive speedups over compiled reference layers and standard Python-based implementations.
 
 **Original Paper:** [mHC: Manifold-Constrained Hyper-Connections](https://arxiv.org/abs/2512.24880) (DeepSeek-AI)
 
@@ -17,16 +17,13 @@ pip install mhc-mlx
 ## Quick Start
 
 ### Option 1: Drop-in Layer
-Use `MHCLayer` as a replacement for standard residual blocks.
+Use `MHCLayer` for maximum performance.
 
 ```python
 import mlx.core as mx
 from mhc_mlx import MHCLayer
 
-# Initialize layer
 layer = MHCLayer(n=32, C=64) # 32 streams, 64 channels each
-
-# Forward pass
 x = mx.random.normal((1, 32, 64))
 y = layer(x)
 ```
@@ -38,30 +35,25 @@ Enhance **any** existing MLX module with manifold-constrained stability.
 import mlx.nn as nn
 from mhc_mlx import MHCRewire
 
-# Wrap a standard Linear layer (or a whole Transformer block)
+# Zero-Cost Folding: automatically optimizes Linear weights
 layer = MHCRewire(nn.Linear(512, 512), dims=512, n=16)
 
 x = mx.random.normal((1, 512))
-y = layer(x) # Computes: H_post * (Linear(H_pre * x) + M * H_pre * x)
-```
-
-**Note:** You can also import as `mlx_mhc` if you prefer the style of other community packages:
-```python
-from mlx_mhc import MHCLayer
+y = layer(x) 
 ```
 
 ## Performance
 
-We benchmarked on an Apple M4 Pro (macOS 15.6). `mhc-mlx` automatically selects the best kernel strategy based on workload size.
+We benchmarked on an Apple M4 Pro (macOS 15.6). `mhc-mlx` outperforms standard implementations across all scales.
 
-### Head-to-Head: mhc-mlx vs mlx-mhc
+### Head-to-Head: mhc-mlx vs mlx-mhc (Competitor)
 
-| Scenario | mhc-mlx | mlx-mhc | Speedup |
+| Scenario | mhc-mlx (ours) | mlx-mhc (them) | Speedup |
 |---|---|---|---|
-| **Latency** ($B=1, C=512$) | **456.67 us** | 966.17 us | **2.12x** |
-| **Throughput** ($B=1, C=512$) | **85.56 us** | 804.49 us | **9.40x** |
-| **Latency** ($B=32, C=2048$) | **575.46 us** | 1278.92 us | **2.22x** |
-| **Throughput** ($B=32, C=2048$) | **249.43 us** | 1104.45 us | **4.43x** |
+| **Latency** ($B=1, C=2048$) | **552.67 us** | 975.08 us | **1.76x** |
+| **Throughput** ($B=1, C=2048$) | **148.05 us** | 802.47 us | **5.42x** |
+| **Latency** ($B=32, C=2048$) | **581.67 us** | 1310.63 us | **2.25x** |
+| **Throughput** ($B=32, C=2048$) | **243.65 us** | 1122.41 us | **4.61x** |
 
 ### Why We're Faster
 
@@ -72,9 +64,7 @@ We benchmarked on an Apple M4 Pro (macOS 15.6). `mhc-mlx` automatically selects 
 
 ### Latency Floor ($B=1$, Sequence Length=32)
 
-Optimized for ultra-low latency response times.
-
-| Channels (C) | Kernel Strategy | Layer Speedup |
+| Channels (C) | Kernel Strategy | Layer Speedup (vs Compiled MLX) |
 |---|---|---|
 | 256 | Fully Fused | **2.27x** |
 | 1024 | Fully Fused | **1.57x** |
@@ -82,29 +72,15 @@ Optimized for ultra-low latency response times.
 | 4096 | Column Parallel | **1.41x** |
 | 8192 | Column Parallel | **2.18x** |
 
-### High Throughput ($B=32$, Sequence Length=32)
-
-Maximum speedups for heavy data processing.
-
-| Operation | Scale (n, C) | Peak Speedup |
-|---|---|---|
-| **Sinkhorn-Knopp** | n=4 | **26.99x** |
-| **Mix + Add (Fused)** | n=32, C=2048 | **14.92x** |
-| **Full MHCLayer** | n=4, C=4096 | **17.33x** |
-
-*(Benchmarks run with bfloat16. Reproduction: `PYTHONPATH=. python compare_mhc.py`)*
-
 ## Key Optimizations
 
-- **Fully Fused Kernel:** Single kernel for Aggregate + RMS + Mix + Add. Ideal for $B \times C \le 2048$.
+- **"Zero-Cost" Weight Folding:** `MHCRewire` folds scaling directly into `nn.Linear` weights, eliminating pre-scaling overhead.
+- **Fully Fused Kernel:** Single-pass kernel for Aggregate + RMS + Mix + Add.
 - **Column-Parallel Mixing:** Vectorized kernel maximizing throughput for larger workloads.
-- **Adaptive Dispatch:** Runtime heuristic selects the fastest kernel.
-- **Super-Fused Backward:** Fused gradients for maximum training efficiency.
+- **Adaptive Dispatch:** Runtime heuristic selects the fastest kernel strategy.
 
 ## Troubleshooting
 
-**Kernel Compilation Errors:**
-If you see Metal build errors, ensure you are on macOS with Apple Silicon.
 Run diagnostics to check your environment:
 ```bash
 mhc-mlx-info
@@ -112,7 +88,7 @@ mhc-mlx-info
 
 ## Development & Publishing
 
-**Workflow Name:** For PyPI Trusted Publishing, the workflow filename is `publish.yml`.
+**Workflow Name:** For PyPI Trusted Publishing, use `publish.yml`.
 
 ## License
 

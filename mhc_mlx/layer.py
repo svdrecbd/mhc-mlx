@@ -266,6 +266,27 @@ class MHCLayer(nn.Module):
                 self._compiled_reference = self._reference_forward
         return self._compiled_reference
 
+    def post_combine(self, x_reshaped: mx.array, y_inner_reshaped: mx.array) -> mx.array:
+        """Optimized post-combine step for external modules."""
+        H_pre_act, H_post_act = activate_pre_post(self.H_pre_raw, self.H_post_raw)
+        M = self.mixing_matrix()
+        
+        # H_post * (y_inner + (M * H_pre) @ x)
+        # We fold H_pre and H_post into M, and H_post into y_inner.
+        M_final = (M * H_pre_act.reshape(1, -1)) * H_post_act.reshape(-1, 1)
+        # Ensure M_final is contiguous for the Metal kernel
+        M_final = mx.array(M_final)
+        
+        bias = y_inner_reshaped * H_post_act.reshape(1, self.n, 1)
+        
+        return stream_mix_add_metal_autograd(
+            x_reshaped,
+            M_final,
+            bias,
+            threads_per_group=self.threads_per_group,
+            verbose=False,
+        )
+
     def __call__(self, x_expanded: mx.array, *, return_dtype: mx.Dtype | None = None) -> mx.array:
         """Run the mHC layer.
 
@@ -381,8 +402,6 @@ class MHCRewire(nn.Module):
 
     def __call__(self, x: mx.array) -> mx.array:
         dims = x.shape[-1]
-        if dims != self.dims:
-            raise ValueError(f"Input dims {dims} != expected {self.dims}")
         C = dims // self.n
 
         # Get learnable scales and mixing matrix
@@ -391,24 +410,27 @@ class MHCRewire(nn.Module):
 
         # OPTIMIZATION: Weight Folding
         if isinstance(self.inner, nn.Linear):
+            # Folding logic: H_pre is applied to x, then @ weight
+            # Equivalent to x @ (weight * H_pre_expanded)
             h_pre_expanded = mx.repeat(H_pre_act, C)
-            folded_weight = self.inner.weight * h_pre_expanded
-            y_inner = x @ folded_weight.T
-            if self.inner.bias is not None:
-                y_inner = y_inner + self.inner.bias
+            x_pre = x * h_pre_expanded
+            y_inner = self.inner(x_pre)
         else:
             # Fallback: explicit multiply
             x_reshaped = x.reshape(-1, self.n, C)
             x_pre = x_reshaped * H_pre_act.reshape(1, self.n, 1)
             y_inner = self.inner(x_pre.reshape(x.shape))
 
-        # OPTIMIZATION: Residual Folding
-        M_folded = M * H_pre_act.reshape(1, -1)
-        
+        # OPTIMIZATION: Residual Folding + Post-Combine
+        # H_post * (y_inner + (M * H_pre) @ x)
         x_reshaped = x.reshape(-1, self.n, C)
         y_inner_reshaped = y_inner.reshape(-1, self.n, C)
         
-        x_mixed = mx.einsum('ij,...jd->...id', M_folded, x_reshaped)
+        # M_final folds H_pre into the mixing matrix
+        M_final = M * H_pre_act.reshape(1, -1)
+        
+        # Perform mix + add
+        x_mixed = mx.einsum('ij,...jd->...id', M_final, x_reshaped)
         out = (y_inner_reshaped + x_mixed) * H_post_act.reshape(1, self.n, 1)
         
         return out.reshape(x.shape)

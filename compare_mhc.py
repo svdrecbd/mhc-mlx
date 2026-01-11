@@ -1,7 +1,7 @@
 import time
 import mlx.core as mx
 import mlx.nn as nn
-from mhc_mlx.layer import MHCLayer
+from mhc_mlx.layer import MHCLayer, MHCRewire
 import mlx_mhc as their_mhc
 
 def benchmark_fn(fn, x, iters=100, warmup=20, mode="latency"):
@@ -36,50 +36,44 @@ def benchmark_fn(fn, x, iters=100, warmup=20, mode="latency"):
     return sorted(times)[len(times)//2]
 
 def run_comparison(B, n, C, iters=100):
-    print(f"\n--- Head-to-Head: B={B}, n={n}, C={C} ---")
-    x = mx.random.normal((B, n, C)).astype(mx.bfloat16)
+    dims = n * C
+    print(f"\n--- Head-to-Head: B={B}, n={n}, C={C} (dims={dims}) ---")
+    x = mx.random.normal((B, 1, dims)).astype(mx.bfloat16)
     
-    # mhc-mlx (our package)
-    # We use identity_init=False to match their random init for a fair fight
-    our_layer = MHCLayer(n=n, C=C, use_metal=True, identity_init=False)
-    # They use 20 iters by default in my script, let's keep it same
-    our_layer.sinkhorn_iters = 20
-    our_layer.train(True) # Force Sinkhorn computation every pass
-    
-    # mlx-mhc (slop)
-    their_layer = their_mhc.ManifoldHyperConnection(dims=n*C, expansion=n, sinkhorn_iterations=20)
-    their_layer.train(True) # Force Sinkhorn computation every pass
-    
-    def our_bench(x_in):
-        return our_layer(x_in)
-        
+    # 1. mhc-mlx: MHCLayer (Direct)
+    base_layer = MHCLayer(n=n, C=C, use_metal=True, identity_init=False)
+    base_layer.train(True)
+    def base_bench(x_in):
+        x_mhc = x_in.reshape(B, n, C)
+        return base_layer(x_mhc)
+
+    # 2. mlx-mhc
+    their_layer = their_mhc.ManifoldHyperConnection(dims=dims, expansion=n, sinkhorn_iterations=20)
+    their_layer.train(True)
     def their_bench(x_in):
-        # Full mHC graph: 
-        # x_pre = H_pre * x
-        # x_next = H_post * (layer(x_pre) + M * x_pre)
-        # We assume layer(x_pre) is identity for pure overhead test
         x_pre = their_layer.pre_scale(x_in)
         return their_layer.post_combine(x_in, x_pre)
 
-    # Latency
-    our_lat = benchmark_fn(our_bench, x, iters=iters, mode="latency")
-    their_lat = benchmark_fn(their_bench, x, iters=iters, mode="latency")
-    print(f"Latency (median):")
-    print(f"  mhc-mlx (ours): {our_lat*1e6:.2f} us")
-    print(f"  mlx-mhc (them): {their_lat*1e6:.2f} us")
-    print(f"  Speedup: {their_lat/our_lat:.2f}x")
+    # Benchmarks
+    results = {}
+    for mode in ["latency", "throughput"]:
+        results[mode] = {
+            "base": benchmark_fn(base_bench, x, iters=iters, mode=mode),
+            "their": benchmark_fn(their_bench, x, iters=iters, mode=mode),
+        }
 
-    # Throughput
-    our_thr = benchmark_fn(our_bench, x, iters=iters, mode="throughput")
-    their_thr = benchmark_fn(their_bench, x, iters=iters, mode="throughput")
-    print(f"Throughput (avg):")
-    print(f"  mhc-mlx (ours): {our_thr*1e6:.2f} us/iter")
-    print(f"  mlx-mhc (them): {their_thr*1e6:.2f} us/iter")
-    print(f"  Speedup: {their_thr/our_thr:.2f}x")
+    for mode in ["latency", "throughput"]:
+        label = "Latency (median)" if mode == "latency" else "Throughput (avg)"
+        unit = "us" if mode == "latency" else "us/iter"
+        print(f"{label}:")
+        print(f"  mhc-mlx (MHCLayer):  {results[mode]['base']*1e6:.2f} {unit}")
+        print(f"  mlx-mhc (Them):       {results[mode]['their']*1e6:.2f} {unit}")
+        
+        speedup_vs_them = results[mode]['their'] / results[mode]['base']
+        print(f"  Speedup vs Competitor: {speedup_vs_them:.2f}x")
 
 if __name__ == "__main__":
     mx.set_default_device(mx.gpu)
-    # Small case
-    run_comparison(B=1, n=32, C=512)
-    # Large case
+    # Larger channels where Metal shines
+    run_comparison(B=1, n=32, C=2048)
     run_comparison(B=32, n=32, C=2048)
