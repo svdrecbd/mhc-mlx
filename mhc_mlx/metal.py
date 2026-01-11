@@ -2847,8 +2847,12 @@ def _mhc_fused_autograd_fn(
             dH_pre = mhc_backward_dH_pre_metal(
                 x, y_agg, d_y_norm, inv_rms, d_r, rms_weight, threads_per_group=threads_per_group, verbose=False
             )
-            dH_post = mhc_backward_dH_post_metal(dout, d_y_norm, threads_per_group=threads_per_group, verbose=False)
-            d_rms_weight = mhc_backward_rms_weight_metal(y_agg, inv_rms, dout, threads_per_group=threads_per_group)
+            dH_post = mhc_backward_dH_post_metal(
+                dout, y_agg, inv_rms, rms_weight, threads_per_group=threads_per_group, verbose=False
+            )
+            d_rms_weight = mhc_backward_drms_weight_metal(
+                y_agg, d_y_norm, inv_rms, threads_per_group=threads_per_group, verbose=False
+            )
 
         return _match_structure(primals, [dx, dM, dH_pre, dH_post, d_rms_weight])
 
