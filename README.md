@@ -16,26 +16,38 @@ pip install mhc-mlx
 
 ## Quick Start
 
-### Option 1: Drop-in Layer (Recommended)
-Use `MHCLayer` for maximum performance.
+### Option 1: The "Easy Button" (AutoPatcher)
+Automatically inject mHC into any existing MLX model (e.g., Llama, Mistral) by detecting compatible layers.
+
+```python
+import mlx.nn as nn
+from mhc_mlx import AutoPatcher
+
+# Load your model (e.g. from mlx-lm)
+model = ... 
+
+# One line to upgrade the entire network
+# Automatically wraps all shape-preserving Linear/QuantizedLinear layers
+AutoPatcher.patch(model, n_streams=32)
+```
+
+### Option 2: Drop-in Layer
+Use `MHCLayer` for maximum performance when building custom models.
 
 ```python
 import mlx.core as mx
 from mhc_mlx import MHCLayer
 
-layer = MHCLayer(n=32, C=64) # 32 streams, 64 channels each
+layer = MHCLayer(n=32, C=64) 
 x = mx.random.normal((1, 32, 64))
 y = layer(x)
 ```
 
-### Option 2: Universal Wrapper (MHCRewire)
-Enhance **any** existing MLX module (Linear, Conv2d, Transformers) with manifold-constrained stability. *Note: optimizing arbitrary modules incurs some overhead compared to the fused MHCLayer.*
+### Option 3: Universal Wrapper (MHCRewire)
+Manually wrap specific modules.
 
 ```python
-import mlx.nn as nn
 from mhc_mlx import MHCRewire
-
-# Wrap a standard Linear layer
 layer = MHCRewire(nn.Linear(512, 512), dims=512, n=16)
 ```
 
