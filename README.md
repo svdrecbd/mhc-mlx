@@ -99,6 +99,30 @@ Optimized gradients ensure training is as fast as inference.
 - **Adaptive Dispatch:** Runtime heuristic selects the fastest kernel strategy.
 - **Super-Fused Backward:** Fused gradients for maximum training efficiency.
 
+## Advanced Usage
+
+### Auto-Tuning for Your Hardware
+
+`mhc-mlx` comes with a JIT kernel auto-tuner that finds the optimal threadgroup sizes for your specific Mac.
+
+```bash
+# Run the tuner (takes ~30s)
+python scripts/tune.py
+```
+This generates a `mhc_tuning.json` file. The library will automatically load this config to squeeze out the last 5-10% of performance.
+
+### Custom Blocks: Fused Residual Add + Aggregate
+
+If you are building custom Transformer blocks, you can use `residual_add_agg` to fuse the residual connection with the mHC aggregation step. This saves a full memory read/write round-trip (~1.4x speedup).
+
+```python
+from mhc_mlx import residual_add_agg
+
+# Standard: x = x + res; y_agg = aggregate(x)
+# Fused:
+x, y_agg = residual_add_agg(x, res, H_pre)
+```
+
 ## Troubleshooting
 
 Run diagnostics to check your environment:

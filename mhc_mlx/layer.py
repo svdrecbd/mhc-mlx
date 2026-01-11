@@ -113,7 +113,7 @@ class MHCLayer(nn.Module):
         self.fused_backward = bool(fused_backward)
         self.mix_kernel = str(mix_kernel)
         if threads_per_group is None:
-            self.threads_per_group = suggest_threads_per_group(self.C)
+            self.threads_per_group = None
         else:
             self.threads_per_group = int(threads_per_group)
         self.identity_init = bool(identity_init)

@@ -8,12 +8,31 @@ Forward and backward use Metal kernels.
 
 from __future__ import annotations
 
+import json
 import hashlib
 import os
 import platform
 from functools import lru_cache
 
 import mlx.core as mx
+
+# Config loading
+_TUNING_CONFIG = {}
+_CONFIG_PATHS = [
+    "mhc_tuning.json",
+    os.path.join(os.path.expanduser("~"), ".cache", "mhc-mlx", "tuning.json"),
+]
+
+for path in _CONFIG_PATHS:
+    if os.path.exists(path):
+        try:
+            with open(path, "r") as f:
+                _TUNING_CONFIG.update(json.load(f))
+        except Exception:
+            pass
+
+def _get_tuned_tpg(kernel_name: str, default: int) -> int:
+    return _TUNING_CONFIG.get(kernel_name, default)
 
 _KERNEL_DIR = os.path.join(os.path.dirname(__file__), "kernels")
 _STREAM_MIX_ADD_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add.metal")
@@ -942,7 +961,7 @@ def stream_mix_add_metal(
     x: mx.array,
     M: mx.array,
     y_dist: mx.array,
-    threads_per_group: int = 256,
+    threads_per_group: int | None = None,
     verbose: bool = False,
 ) -> mx.array:
     """Compute out = stream_mix(x, M) + y_dist using a Metal kernel.
@@ -969,6 +988,10 @@ def stream_mix_add_metal(
         raise ValueError(f"M must be shape (n,n)=( {n},{n} ), got {M.shape}")
 
     max_n = _validate_n(n)
+    
+    if threads_per_group is None:
+        threads_per_group = _get_tuned_tpg("stream_mix_add", suggest_threads_per_group(C))
+
     if threads_per_group <= 0:
         raise ValueError("threads_per_group must be positive")
     if threads_per_group > _MAX_TPG_ALLOWED:
@@ -1526,7 +1549,7 @@ def sinkhorn_knopp_metal(
     H_res_raw: mx.array,
     iters: int = 20,
     eps: float = 1e-5,
-    threads_per_group: int = 64,
+    threads_per_group: int | None = None,
     verbose: bool = False,
 ) -> mx.array:
     """Compute M = sinkhorn_knopp(exp(H_res_raw)) using a Metal kernel.
@@ -1545,6 +1568,12 @@ def sinkhorn_knopp_metal(
         raise ValueError(f"H_res_raw must be square [n, n], got shape {H_res_raw.shape}")
 
     n = _validate_n(H_res_raw.shape[0])
+    
+    if threads_per_group is None:
+        # Default for Sinkhorn is usually small, but if N is large we might tune it
+        # For N=32, we force 32 anyway below.
+        threads_per_group = _get_tuned_tpg("sinkhorn_knopp", 64)
+
     if threads_per_group <= 0:
         raise ValueError("threads_per_group must be positive")
     if threads_per_group > _MAX_TPG_ALLOWED:
@@ -1664,7 +1693,7 @@ def residual_add_agg_metal(
     x: mx.array,
     res: mx.array,
     H_pre: mx.array,
-    threads_per_group: int = 256,
+    threads_per_group: int | None = None,
     output_dtype: mx.Dtype | None = None,
     verbose: bool = False,
 ) -> tuple[mx.array, mx.array]:
@@ -1680,6 +1709,9 @@ def residual_add_agg_metal(
         raise ValueError(f"res must match x shape, got {res.shape} vs {x.shape}")
     B, n, C = x.shape
     max_n = _validate_n(n)
+    
+    if threads_per_group is None:
+        threads_per_group = _get_tuned_tpg("residual_add_agg", suggest_threads_per_group(C))
     
     if threads_per_group <= 0:
         raise ValueError("threads_per_group must be positive")
@@ -2677,12 +2709,16 @@ def stream_mix_add_metal_autograd(
     x: mx.array,
     M: mx.array,
     y_dist: mx.array,
-    threads_per_group: int = 256,
+    threads_per_group: int | None = None,
     verbose: bool = False,
 ) -> mx.array:
     """Stream mix + add with Metal backward kernels."""
     if verbose:
         _maybe_print_source(_stream_mix_add_source(_validate_n(M.shape[0])), "stream_mix_add", verbose=True)
+    
+    if threads_per_group is None:
+        threads_per_group = _get_tuned_tpg("stream_mix_add", 256)
+        
     return _stream_mix_add_autograd_fn(int(threads_per_group))(x, M, y_dist)
 
 
@@ -2722,12 +2758,16 @@ def sinkhorn_knopp_metal_autograd(
     H_res_raw: mx.array,
     iters: int = 20,
     eps: float = 1e-5,
-    threads_per_group: int = 64,
+    threads_per_group: int | None = None,
     verbose: bool = False,
 ) -> mx.array:
     """Sinkhorn with Metal backward kernels."""
     if verbose:
         _maybe_print_source(_sinkhorn_source(_validate_n(H_res_raw.shape[0]), iters, eps), "sinkhorn_knopp", True)
+        
+    if threads_per_group is None:
+        threads_per_group = _get_tuned_tpg("sinkhorn_knopp", 64)
+        
     return _sinkhorn_autograd_fn(int(iters), float(eps), int(threads_per_group))(H_res_raw)
 
 
@@ -2835,7 +2875,7 @@ def mhc_forward_fused_metal_autograd(
     H_post: mx.array,
     rms_weight: mx.array,
     eps: float = 1e-5,
-    threads_per_group: int = 256,
+    threads_per_group: int | None = None,
     fused_backward: bool = True,
     output_dtype: mx.Dtype | None = None,
     mix_kernel: str = "auto",
@@ -2851,6 +2891,13 @@ def mhc_forward_fused_metal_autograd(
         _maybe_print_source(_mhc_forward_agg_source(max_n), "mhc_forward_agg", True)
         _maybe_print_source(_mhc_forward_rms_reduce_source(eps), "mhc_forward_rms_reduce", True)
         _maybe_print_source(_stream_mix_add_rms_source(max_n), "stream_mix_add_rms", True)
+    
+    if threads_per_group is None:
+        # Use the stream_mix_add tuning as a proxy for the forward pass 
+        # since it's the heaviest component for large C.
+        C = x.shape[2]
+        threads_per_group = _get_tuned_tpg("stream_mix_add", suggest_threads_per_group(C))
+
     output_dtype = _normalize_output_dtype(output_dtype)
     mix_kernel = _normalize_mix_kernel(mix_kernel)
     return _mhc_fused_autograd_fn(
