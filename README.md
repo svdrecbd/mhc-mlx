@@ -42,6 +42,22 @@ from mlx_mhc import MHCLayer
 
 We benchmarked on an Apple M4 Pro (macOS 15.6). `mhc-mlx` automatically selects the best kernel strategy based on workload size.
 
+### Head-to-Head: mhc-mlx vs mlx-mhc
+
+| Scenario | mhc-mlx (ours) | mlx-mhc (other) | Speedup |
+|---|---|---|---|
+| **Latency** ($B=1, C=512$) | **456.67 us** | 966.17 us | **2.12x** |
+| **Throughput** ($B=1, C=512$) | **85.56 us** | 804.49 us | **9.40x** |
+| **Latency** ($B=32, C=2048$) | **575.46 us** | 1278.92 us | **2.22x** |
+| **Throughput** ($B=32, C=2048$) | **249.43 us** | 1104.45 us | **4.43x** |
+
+### Why We're Faster
+
+| Implementation | Characteristics | Performance Impact |
+|---|---|---|
+| **Python / JIT** | Many small kernel launches | Higher overhead, low occupancy |
+| **Fused Metal** | 1-3 highly optimized kernels | Minimal overhead, maximum bandwidth |
+
 ### Latency Floor ($B=1$, Sequence Length=32)
 
 Optimized for ultra-low latency response times.
@@ -64,17 +80,11 @@ Maximum speedups for heavy data processing.
 | **Mix + Add (Fused)** | n=32, C=2048 | **14.92x** |
 | **Full MHCLayer** | n=4, C=4096 | **17.33x** |
 
-*(Benchmarks run with bfloat16)*
-
-To reproduce:
-```bash
-mhc-mlx-bench --mode latency
-mhc-mlx-bench --mode throughput --B 32
-```
+*(Benchmarks run with bfloat16. Reproduction: `PYTHONPATH=. python compare_mhc.py`)*
 
 ## Key Optimizations
 
-- **Fully Fused Kernel:** Single kernel for Aggregate + RMS + Mix + Add. Ideal for $B 	imes C \le 2048$.
+- **Fully Fused Kernel:** Single kernel for Aggregate + RMS + Mix + Add. Ideal for $B \times C \le 2048$.
 - **Column-Parallel Mixing:** Vectorized kernel maximizing throughput for larger workloads.
 - **Adaptive Dispatch:** Runtime heuristic selects the fastest kernel.
 - **Super-Fused Backward:** Fused gradients for maximum training efficiency.
@@ -87,9 +97,6 @@ Run diagnostics to check your environment:
 ```bash
 mhc-mlx-info
 ```
-
-**"No module named mhc_mlx"**
-Ensure you installed the package `mhc-mlx` (dash), not `mlx-mhc` (which is a different package).
 
 ## Development & Publishing
 
