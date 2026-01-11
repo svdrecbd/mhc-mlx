@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mhc-mlx"
-version = "0.5.4"
+version = "0.5.6"
 description = "High-performance MLX implementation of Manifold-Constrained Hyper-Connections (mHC)"
 requires-python = ">=3.10"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = { text = "MIT" }
 authors = [{ name = "Salvador Escobedo", email = "svdrecbd@gmail.com" }]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -16,6 +16,7 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS :: MacOS X",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -23,7 +24,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-  "mlx>=0.30.0; platform_system == 'Darwin'",
+  "mlx>=0.30.0",
 ]
 
 [project.urls]

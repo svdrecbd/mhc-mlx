@@ -35,11 +35,16 @@ jobs:
     - name: Install Wheel
       run: pip install dist/*.whl
 
-    - name: Run Tests (Installed)
-      run: |
-        # Run from a different directory to ensure we test the installed package
-        cd tests
-        python -m pytest test_packaging.py
-        # Run correctness tests
-        cd ..
-        python -m pytest tests/test_correctness.py
+        - name: Run Tests (Installed)
+
+          run: |
+
+            # Run with importlib mode to ensure we test the installed package
+
+            python -m pytest --import-mode=importlib tests/test_packaging.py
+
+            # Run correctness tests
+
+            python -m pytest --import-mode=importlib tests/test_correctness.py
+
+    

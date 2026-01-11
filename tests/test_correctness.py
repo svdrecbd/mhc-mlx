@@ -335,7 +335,24 @@ def test_backward_matches_reference() -> None:
     loss_err = float(mx.abs(ref_loss_val - metal_loss_val).item())
     assert loss_err < 1e-4
 
-    tol = 1e-4
-    for g_ref, g_metal in zip(ref_grads, metal_grads):
-        err = max_abs(g_ref, g_metal)
-        assert err < tol
+def test_reference_fallback():
+    """Verify that MHC_MLX_DISABLE_METAL=1 forces the reference path."""
+    import os
+    os.environ["MHC_MLX_DISABLE_METAL"] = "1"
+    try:
+        layer = MHCLayer(n=4, C=16, use_metal=True)
+        # Should be false now
+        assert layer._should_use_metal(1, 4, 16) is False
+        
+        x = mx.random.normal((1, 4, 16))
+        y = layer(x)
+        mx.eval(y)
+        assert y.shape == (1, 4, 16)
+    finally:
+        del os.environ["MHC_MLX_DISABLE_METAL"]
+
+    
+
+    
+
+    

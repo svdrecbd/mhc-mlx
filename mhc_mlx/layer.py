@@ -23,6 +23,10 @@ from __future__ import annotations
 import mlx.core as mx
 import mlx.nn as nn
 import os
+import warnings
+
+# Global flag to ensure we only warn about Metal runtime failures once
+_METAL_FAILED = False
 
 from .metal import (
     mhc_forward_fused_metal_autograd,
@@ -113,6 +117,14 @@ class MHCLayer(nn.Module):
         self.throughput_allow_fused_n32_small_C = int(throughput_allow_fused_n32_small_C)
         self.fused_backward = bool(fused_backward)
         self.mix_kernel = str(mix_kernel)
+        
+        # Auto-detect Metal availability
+        self.metal_available = hasattr(mx.fast, "metal_kernel")
+        if not self.metal_available or os.getenv("MHC_MLX_DISABLE_METAL", "0") == "1":
+            self.use_metal = False
+        else:
+            self.use_metal = bool(use_metal)
+
         if threads_per_group is None:
             self.threads_per_group = None
         else:
@@ -143,13 +155,21 @@ class MHCLayer(nn.Module):
     def mixing_matrix(self) -> mx.array:
         """Return the current mixing matrix M (after Sinkhorn)."""
         if self.use_metal:
-            return sinkhorn_knopp_metal_autograd(
-                self.H_res_raw, 
-                iters=self.sinkhorn_iters, 
-                eps=self.eps,
-                threads_per_group=self.threads_per_group,
-                verbose=False
-            )
+            global _METAL_FAILED
+            try:
+                return sinkhorn_knopp_metal_autograd(
+                    self.H_res_raw, 
+                    iters=self.sinkhorn_iters, 
+                    eps=self.eps,
+                    threads_per_group=self.threads_per_group,
+                    verbose=False
+                )
+            except RuntimeError as e:
+                if not _METAL_FAILED:
+                    warnings.warn(
+                        f"Metal kernel execution failed in mixing_matrix, falling back to reference path. Error: {e}"
+                    )
+                    _METAL_FAILED = True
         return mixing_matrix_from_logits(self.H_res_raw, iters=self.sinkhorn_iters, eps=self.eps)
 
     def _should_use_metal(self, B: int, n: int, C: int) -> bool:
@@ -279,23 +299,39 @@ class MHCLayer(nn.Module):
     def post_combine(self, x_reshaped: mx.array, y_inner_reshaped: mx.array) -> mx.array:
         """Optimized post-combine step for external modules."""
         H_pre_act, H_post_act = activate_pre_post(self.H_pre_raw, self.H_post_raw)
-        M = self.mixing_matrix()
         
-        # H_post * (y_inner + (M * H_pre) @ x)
-        # We fold H_pre and H_post into M, and H_post into y_inner.
-        M_final = (M * H_pre_act.reshape(1, -1)) * H_post_act.reshape(-1, 1)
-        # Ensure M_final is contiguous for the Metal kernel
-        M_final = mx.array(M_final)
-        
-        bias = y_inner_reshaped * H_post_act.reshape(1, self.n, 1)
-        
-        return stream_mix_add_metal_autograd(
-            x_reshaped,
-            M_final,
-            bias,
-            threads_per_group=self.threads_per_group,
-            verbose=False,
-        )
+        if self.use_metal:
+            global _METAL_FAILED
+            try:
+                M = self.mixing_matrix()
+                # H_post * (y_inner + (M * H_pre) @ x)
+                # We fold H_pre and H_post into M, and H_post into y_inner.
+                M_final = (M * H_pre_act.reshape(1, -1)) * H_post_act.reshape(-1, 1)
+                # Ensure M_final is contiguous for the Metal kernel
+                M_final = mx.array(M_final)
+                
+                bias = y_inner_reshaped * H_post_act.reshape(1, self.n, 1)
+                
+                return stream_mix_add_metal_autograd(
+                    x_reshaped,
+                    M_final,
+                    bias,
+                    threads_per_group=self.threads_per_group,
+                    verbose=False,
+                )
+            except RuntimeError as e:
+                if not _METAL_FAILED:
+                    warnings.warn(
+                        f"Metal kernel execution failed in post_combine, falling back to reference path. Error: {e}"
+                    )
+                    _METAL_FAILED = True
+
+        # Reference fallback
+        M = mixing_matrix_from_logits(self.H_res_raw, iters=self.sinkhorn_iters, eps=self.eps)
+        M_final = M * H_pre_act.reshape(1, -1)
+        x_mixed = mx.einsum('ij,...jd->...id', M_final, x_reshaped)
+        out = (y_inner_reshaped + x_mixed) * H_post_act.reshape(1, self.n, 1)
+        return out
 
     def __call__(self, x_expanded: mx.array, *, return_dtype: mx.Dtype | None = None) -> mx.array:
         """Run the mHC layer.
@@ -342,28 +378,45 @@ class MHCLayer(nn.Module):
                 self.rms_weight,
             )
         elif self._should_use_metal(B, n, C):
-            # Use Metal kernels for Sinkhorn + fused RMSNorm/mix/add.
-            M = sinkhorn_knopp_metal_autograd(
-                self.H_res_raw,
-                iters=self.sinkhorn_iters,
-                eps=self.eps,
-                threads_per_group=self.threads_per_group,
-                verbose=False,
-            )
-            H_pre_act, H_post_act = activate_pre_post(self.H_pre_raw, self.H_post_raw)
-            out = mhc_forward_fused_metal_autograd(
-                x=x_expanded,
-                M=M,
-                H_pre=H_pre_act,
-                H_post=H_post_act,
-                rms_weight=self.rms_weight,
-                eps=self.eps,
-                threads_per_group=self.threads_per_group,
-                fused_backward=self._should_use_fused_backward(B, n, C),
-                output_dtype=output_dtype,
-                mix_kernel=self.mix_kernel,
-                verbose=False,
-            )
+            global _METAL_FAILED
+            try:
+                # Use Metal kernels for Sinkhorn + fused RMSNorm/mix/add.
+                M = sinkhorn_knopp_metal_autograd(
+                    self.H_res_raw,
+                    iters=self.sinkhorn_iters,
+                    eps=self.eps,
+                    threads_per_group=self.threads_per_group,
+                    verbose=False,
+                )
+                H_pre_act, H_post_act = activate_pre_post(self.H_pre_raw, self.H_post_raw)
+                out = mhc_forward_fused_metal_autograd(
+                    x=x_expanded,
+                    M=M,
+                    H_pre=H_pre_act,
+                    H_post=H_post_act,
+                    rms_weight=self.rms_weight,
+                    eps=self.eps,
+                    threads_per_group=self.threads_per_group,
+                    fused_backward=self._should_use_fused_backward(B, n, C),
+                    output_dtype=output_dtype,
+                    mix_kernel=self.mix_kernel,
+                    verbose=False,
+                )
+            except RuntimeError as e:
+                if not _METAL_FAILED:
+                    warnings.warn(
+                        f"Metal kernel execution failed, falling back to reference path. Error: {e}"
+                    )
+                    _METAL_FAILED = True
+                
+                ref_fn = self._get_reference_runner()
+                out = ref_fn(
+                    x_expanded,
+                    self.H_pre_raw,
+                    self.H_post_raw,
+                    self.H_res_raw,
+                    self.rms_weight,
+                )
         else:
             ref_fn = self._get_reference_runner()
             out = ref_fn(

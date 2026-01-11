@@ -1,8 +1,8 @@
 # mhc-mlx
 
-**High-performance MLX implementation of Manifold-Constrained Hyper-Connections (mHC)** for Apple Silicon.
+**High-performance MLX implementation of Manifold-Constrained Hyper-Connections (mHC).**
 
-mHC improves training stability and performance in deep architectures by constraining residual connections to the Birkhoff polytope (doubly stochastic matrices). This library provides optimized Metal kernels that achieve significant speedups over standard baseline implementations.
+mHC improves training stability and performance in deep architectures by constraining residual connections to the Birkhoff polytope (doubly stochastic matrices). This library provides optimized Metal kernels for Apple Silicon and a fast compiled fallback for other platforms.
 
 **Original Paper:** [mHC: Manifold-Constrained Hyper-Connections](https://arxiv.org/abs/2512.24880) (DeepSeek-AI)
 
@@ -13,9 +13,9 @@ pip install mhc-mlx
 ```
 
 ## Compatibility
-- **Hardware:** Apple Silicon (M1, M2, M3, M4).
-- **Software:** macOS, MLX >= 0.30.0.
-- **Fallback:** Automatically falls back to a compiled pure-MLX path on other platforms.
+- **Primary:** macOS + Apple Silicon (M1, M2, M3, M4) for peak performance.
+- **Support:** Linux (CPU/CUDA) and Intel Macs via automatic pure-MLX compiled fallback.
+- **Software:** MLX >= 0.30.0.
 
 ## Quick Start (30-second Demo)
 
@@ -83,6 +83,13 @@ If you encounter issues, run the diagnostic utility:
 ```bash
 mhc-mlx-info
 ```
+
+Set `MHC_MLX_DISABLE_METAL=1` in your environment to force the pure-MLX reference path (useful for debugging or non-Metal hardware).
+
+## Support Policy
+- **Tested:** macOS (Apple Silicon) + Linux (CPU/CUDA) using MLX 0.30.0+.
+- **Best Effort:** Intel Macs, older macOS versions, and older MLX versions.
+- **Reporting:** Please include OS, MLX version, and `mhc-mlx-info` output in bug reports.
 
 ## License
 MIT
