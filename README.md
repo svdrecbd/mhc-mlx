@@ -2,7 +2,7 @@
 
 **High-performance MLX implementation of Manifold-Constrained Hyper-Connections (mHC)** for Apple Silicon.
 
-mHC improves training stability and performance in deep architectures by constraining residual connections to the Birkhoff polytope (doubly stochastic matrices). This library provides optimized Metal kernels that achieve massive speedups over standard Python-based implementations.
+mHC improves training stability and performance in deep architectures by constraining residual connections to the Birkhoff polytope (doubly stochastic matrices). This library provides optimized Metal kernels that achieve significant speedups over standard baseline implementations.
 
 **Original Paper:** [mHC: Manifold-Constrained Hyper-Connections](https://arxiv.org/abs/2512.24880) (DeepSeek-AI)
 
@@ -15,7 +15,7 @@ pip install mhc-mlx
 ## Compatibility
 - **Hardware:** Apple Silicon (M1, M2, M3, M4).
 - **Software:** macOS, MLX >= 0.30.0.
-- **Fallback:** Automatically falls back to a compiled pure-MLX path if Metal kernels are unavailable.
+- **Fallback:** Automatically falls back to a compiled pure-MLX path on other platforms.
 
 ## Quick Start (30-second Demo)
 
@@ -25,14 +25,13 @@ import mlx.nn as nn
 from mhc_mlx import MHCRewire
 
 # 1. Take any standard MLX layer
-layer = nn.Linear(512, 512)
+layer = nn.Linear(2048, 2048)
 
 # 2. Wrap it with mHC stability (automatically uses optimized Metal kernels)
-# This computes: H_post * (Linear(H_pre * x) + M * H_pre * x)
-model = MHCRewire(layer, dims=512, n=16)
+model = MHCRewire(layer, dims=2048, n=32)
 
 # 3. Run forward pass
-x = mx.random.normal((1, 512))
+x = mx.random.normal((1, 2048))
 y = model(x)
 mx.eval(y)
 
@@ -41,7 +40,7 @@ loss_fn = lambda m, x: mx.sum(m(x))
 grads = mx.grad(loss_fn)(model, x)
 mx.eval(grads)
 
-print(f"Output shape: {y.shape}") # (1, 512)
+print(f"Output shape: {y.shape}") # (1, 2048)
 ```
 
 *Note: You can also use `from mlx_mhc import MHCRewire` for a community-friendly alias.*
@@ -52,9 +51,9 @@ print(f"Output shape: {y.shape}") # (1, 512)
 
 ### Comparative Benchmarks
 
-Comparison with other standard MLX implementations of mHC ($C=512$):
+Comparison with a standard MLX implementation of mHC ($C=512$):
 
-| Metric | mhc-mlx (Ours) | Standard Impl | Speedup |
+| Metric | mhc-mlx | Baseline Impl | Speedup |
 |---|---|---|---|
 | **Inference Latency** ($B=1$) | **392 us** | 1120 us | **2.86x** |
 | **Training Throughput** ($B=32$) | **105 us** | 866 us | **8.25x** |
@@ -63,7 +62,7 @@ Comparison with other standard MLX implementations of mHC ($C=512$):
 
 | Approach | Architecture | Impact |
 |---|---|---|
-| **Standard** | Multiple kernel launches | High memory overhead, low GPU occupancy |
+| **Baseline** | Multiple kernel launches | High memory overhead, low GPU occupancy |
 | **mhc-mlx** | Fused Metal Kernels | Minimal memory round-trips, maximal bandwidth |
 
 ### Reproduce Benchmarks

@@ -15,6 +15,7 @@ import platform
 from functools import lru_cache
 
 import mlx.core as mx
+from importlib import resources
 
 # Config loading
 _TUNING_CONFIG = {}
@@ -34,7 +35,13 @@ for path in _CONFIG_PATHS:
 def _get_tuned_tpg(kernel_name: str, default: int) -> int:
     return _TUNING_CONFIG.get(kernel_name, default)
 
-_KERNEL_DIR = os.path.join(os.path.dirname(__file__), "kernels")
+# Robust kernel path discovery using importlib.resources
+try:
+    _KERNEL_DIR = str(resources.files("mhc_mlx") / "kernels")
+except Exception:
+    # Fallback for older python or non-package installs
+    _KERNEL_DIR = os.path.join(os.path.dirname(__file__), "kernels")
+
 _STREAM_MIX_ADD_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add.metal")
 _STREAM_MIX_ADD_RMS_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms.metal")
 _STREAM_MIX_ADD_RMS_FP16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_fp16.metal")

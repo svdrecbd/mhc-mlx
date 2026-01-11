@@ -15,7 +15,7 @@ def test_kernels_present():
     # This works for python 3.10+
     try:
         kernel_files = [
-            p.name for p in resources.files("mhc_mlx.kernels").iterdir() 
+            p.name for p in (resources.files("mhc_mlx") / "kernels").iterdir() 
             if p.name.endswith(".metal")
         ]
     except (AttributeError, TypeError):

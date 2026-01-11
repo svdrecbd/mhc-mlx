@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import mlx.core as mx
 import mlx.nn as nn
+import os
 
 from .metal import (
     mhc_forward_fused_metal_autograd,
@@ -152,6 +153,8 @@ class MHCLayer(nn.Module):
         return mixing_matrix_from_logits(self.H_res_raw, iters=self.sinkhorn_iters, eps=self.eps)
 
     def _should_use_metal(self, B: int, n: int, C: int) -> bool:
+        if os.getenv("MHC_MLX_DISABLE_METAL", "0") == "1":
+            return False
         if not self.use_metal:
             return False
         if not self.auto_dispatch:
