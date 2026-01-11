@@ -69,6 +69,8 @@ We benchmarked on an Apple M4 Pro (macOS 15.6). `mhc-mlx` outperforms standard i
 
 ## Key Optimizations
 
+- **"Zero-Cost" Weight Folding:** `MHCRewire` folds scaling directly into `nn.Linear` weights, eliminating pre-scaling overhead.
+- **Quantized Layer Support:** Seamlessly wraps `nn.QuantizedLinear` (4-bit/8-bit) for efficient local LLM inference.
 - **Fully Fused Kernel:** Single kernel for Aggregate + RMS + Mix + Add.
 - **Column-Parallel Mixing:** Vectorized kernel maximizing throughput for larger workloads.
 - **Adaptive Dispatch:** Runtime heuristic selects the fastest kernel strategy.
