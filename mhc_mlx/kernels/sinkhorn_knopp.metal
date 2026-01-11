@@ -21,8 +21,39 @@ threadgroup float H[MAX_N * MAX_N];
 threadgroup float reduce_buf[MAX_TPG];
 
 uint nn = (uint)(n * n);
+
+// Step 1: Find global max for stability
+float local_max = -1e38f; // Init with small number
 for (uint idx = lane; idx < nn; idx += tpg) {
-    H[idx] = metal::exp(float(H_res[idx]));
+    local_max = metal::max(local_max, float(H_res[idx]));
+}
+
+float global_max;
+if (false) { // was tpg <= 32
+    global_max = metal::simd_max(local_max);
+} else {
+    reduce_buf[lane] = local_max;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // Reduce max
+    uint active = tpg;
+    while (active > 1) {
+        uint stride = active / 2;
+        if (lane < stride) {
+            reduce_buf[lane] = metal::max(reduce_buf[lane], reduce_buf[lane + stride]);
+        }
+        if ((active & 1u) != 0u && lane == 0u) {
+            reduce_buf[0] = metal::max(reduce_buf[0], reduce_buf[active - 1u]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        active = stride + (active & 1u);
+    }
+    global_max = reduce_buf[0];
+}
+
+// Step 2: Exponentiate with max subtraction
+for (uint idx = lane; idx < nn; idx += tpg) {
+    H[idx] = metal::exp(float(H_res[idx]) - global_max);
 }
 threadgroup_barrier(mem_flags::mem_threadgroup);
 

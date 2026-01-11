@@ -47,8 +47,9 @@ We benchmarked on an Apple M4 Pro (macOS 15.6). `mhc-mlx` outperforms standard i
 
 | Scenario | mhc-mlx (ours) | mlx-mhc (them) | Speedup |
 |---|---|---|---|
-| **Latency** ($B=1, C=512$) | **392 us** | 1120 us | **2.86x** |
-| **Throughput** ($B=32, C=512$) | **105 us** | 866 us | **8.25x** |
+| **Latency** ($B=1, C=512$) | **435 us** | 1031 us | **2.37x** |
+| **Throughput** ($B=32, C=512$) | **89 us/iter** | 940 us/iter | **10.53x** |
+| **Throughput** ($B=32, C=2048$) | **243 us/iter** | 1122 us/iter | **4.61x** |
 
 ### Why We're Faster
 

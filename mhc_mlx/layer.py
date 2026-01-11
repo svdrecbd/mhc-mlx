@@ -141,6 +141,14 @@ class MHCLayer(nn.Module):
 
     def mixing_matrix(self) -> mx.array:
         """Return the current mixing matrix M (after Sinkhorn)."""
+        if self.use_metal:
+            return sinkhorn_knopp_metal_autograd(
+                self.H_res_raw, 
+                iters=self.sinkhorn_iters, 
+                eps=self.eps,
+                threads_per_group=self.threads_per_group,
+                verbose=False
+            )
         return mixing_matrix_from_logits(self.H_res_raw, iters=self.sinkhorn_iters, eps=self.eps)
 
     def _should_use_metal(self, B: int, n: int, C: int) -> bool:
