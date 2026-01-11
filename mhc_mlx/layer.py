@@ -408,13 +408,13 @@ class MHCRewire(nn.Module):
         H_pre_act, H_post_act = activate_pre_post(self.mhc.H_pre_raw, self.mhc.H_post_raw)
         
         # 1. Pre-scale (H_pre * x)
-        # Note: Apply scaling before the inner layer. MLX will fuse this 
-        # with the following Linear layer's dot product.
-        h_pre_expanded = mx.repeat(H_pre_act, C)
-        x_pre = x * h_pre_expanded
+        # Use broadcasting to avoid allocating a huge expansion vector
+        x_in_reshaped = x.reshape(-1, self.n, C)
+        x_pre = x_in_reshaped * H_pre_act.reshape(1, self.n, 1)
+        x_pre_flat = x_pre.reshape(x.shape)
         
         # 2. Inner Module F(H_pre * x)
-        y_inner = self.inner(x_pre)
+        y_inner = self.inner(x_pre_flat)
 
         # 3. Post-Combine: H_post * (y_inner + (M * H_pre) @ x)
         x_reshaped = x.reshape(-1, self.n, C)

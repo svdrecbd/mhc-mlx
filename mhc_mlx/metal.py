@@ -1549,12 +1549,7 @@ def sinkhorn_knopp_metal(
         raise ValueError("threads_per_group must be positive")
     if threads_per_group > _MAX_TPG_ALLOWED:
         raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED}")
-    tpg = int(threads_per_group)
-    if n <= 32 and tpg > n:
-        tpg = int(n)
-    tpg = int(threads_per_group)
-    if n <= 32 and tpg > n:
-        tpg = int(n)
+    
     tpg = int(threads_per_group)
     if n <= 32 and tpg > n:
         tpg = int(n)
@@ -2609,29 +2604,33 @@ def stream_mix_backward_dx_metal(
     if verbose:
         _maybe_print_source(_stream_mix_backward_dx_source(max_n), "stream_mix_backward_dx", True)
 
-        M_f = M.astype(mx.float32)
+    M_f = M.astype(mx.float32)
+    d_out_f = d_out.astype(mx.float32)
 
-        d_out_f = d_out.astype(mx.float32)
+    kernel = _stream_mix_backward_dx_kernel(max_n)
+    out = kernel(
+        inputs=[M_f, d_out_f],
+        grid=(C, B, 1),
+        threadgroup=(threads_per_group, 1, 1),
+        output_shapes=[d_out_f.shape],
+        output_dtypes=[mx.float32],
+    )[0]
+
+    return out
+
 
     
 
-        kernel = _stream_mix_backward_dx_kernel(max_n)
 
-        out = kernel(
 
-            inputs=[M_f, d_out_f],
 
-            grid=(C, B, 1),
+        
 
-            threadgroup=(threads_per_group, 1, 1),
+    
 
-            output_shapes=[d_out_f.shape],
+            
 
-            output_dtypes=[mx.float32],
-
-        )[0]
-
-        return out
+        
 
     
 
