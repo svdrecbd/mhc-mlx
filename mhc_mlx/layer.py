@@ -215,8 +215,7 @@ class MHCLayer(nn.Module):
     def _should_use_fused_backward(self, B: int, n: int, C: int) -> bool:
         if not self.fused_backward:
             return False
-        # Token-parallel backward prep is always used in the Metal path.
-        return False
+        return True
 
     def _reference_forward(
         self,

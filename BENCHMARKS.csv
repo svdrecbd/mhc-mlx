@@ -1,0 +1,20 @@
+date,commit,branch,B,n,C,mode,impl,time_us
+2026-01-11 01:05:53,23a9fe8,main,1,32,256,latency,MHCLayer,514.33
+2026-01-11 01:05:53,23a9fe8,main,1,32,256,latency,MHCRewire,3161.92
+2026-01-11 01:05:53,23a9fe8,main,1,32,512,latency,MHCLayer,430.67
+2026-01-11 01:05:53,23a9fe8,main,1,32,512,latency,MHCRewire,11821.79
+2026-01-11 01:05:53,23a9fe8,main,1,32,1024,latency,MHCLayer,437.08
+2026-01-11 01:05:53,23a9fe8,main,1,32,1024,latency,MHCRewire,46747.00
+2026-01-11 01:05:53,23a9fe8,main,1,32,2048,latency,MHCLayer,520.04
+2026-01-11 01:06:19,23a9fe8,main,1,32,256,latency,MHCLayer,513.25
+2026-01-11 01:06:19,23a9fe8,main,1,32,256,latency,MHCRewire,3171.46
+2026-01-11 01:06:19,23a9fe8,main,1,32,512,latency,MHCLayer,445.21
+2026-01-11 01:06:19,23a9fe8,main,1,32,512,latency,MHCRewire,11771.79
+2026-01-11 01:06:19,23a9fe8,main,1,32,1024,latency,MHCLayer,436.62
+2026-01-11 01:06:19,23a9fe8,main,1,32,1024,latency,MHCRewire,46445.42
+2026-01-11 01:06:19,23a9fe8,main,1,32,2048,latency,MHCLayer,577.96
+2026-01-11 01:06:19,23a9fe8,main,1,32,4096,latency,MHCLayer,406.88
+2026-01-11 01:06:19,23a9fe8,main,32,32,512,throughput,MHCLayer,117.73
+2026-01-11 01:06:19,23a9fe8,main,32,32,512,throughput,MHCRewire,17480.19
+2026-01-11 01:06:19,23a9fe8,main,32,32,2048,throughput,MHCLayer,1529.09
+2026-01-11 01:06:19,23a9fe8,main,32,32,4096,throughput,MHCLayer,2078.89

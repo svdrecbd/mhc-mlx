@@ -68,6 +68,28 @@ We benchmarked on an Apple M4 Pro (macOS 15.6). `mhc-mlx` outperforms standard i
 | 4096 | Column Parallel | **1.41x** |
 | 8192 | Column Parallel | **2.18x** |
 
+### High Throughput ($B=32$, Sequence Length=32)
+
+Maximum speedups for heavy data processing.
+
+| Operation | Scale (n, C) | Peak Speedup |
+|---|---|---|
+| **Sinkhorn-Knopp** | n=4 | **26.99x** |
+| **Mix + Add (Fused)** | n=32, C=2048 | **14.92x** |
+| **Full MHCLayer** | n=4, C=4096 | **17.33x** |
+
+### Training / Backward Pass
+
+Optimized gradients ensure training is as fast as inference.
+
+| Batch Size | Channels (C) | Speedup vs Compiled MLX |
+|---|---|---|
+| 1 | 2048 | **4.18x** |
+| 1 | 4096 | **2.12x** |
+| 32 | 2048 | **3.10x** |
+
+*(Benchmarks run with bfloat16)*
+
 ## Key Optimizations
 
 - **"Zero-Cost" Weight Folding:** `MHCRewire` folds scaling directly into `nn.Linear` weights, eliminating pre-scaling overhead.

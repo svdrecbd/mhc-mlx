@@ -34,9 +34,26 @@ threadgroup_barrier(mem_flags::mem_threadgroup);
 
 uint base = uint(b) * uint(n) * uint(C);
 
-float acc = 0.0f;
-for (int k_idx = 0; k_idx < n; ++k_idx) {
-    acc += P[k_idx * n + i] * float(d_out[base + uint(k_idx) * uint(C) + c]);
-}
+if ((C % 4) == 0) {
+    // Vectorized path
+    uint c_vec = c * 4;
+    if ((int)c_vec >= C) return;
 
-dx[base + uint(i) * uint(C) + c] = acc;
+    float4 acc = 0.0f;
+    for (int k_idx = 0; k_idx < n; ++k_idx) {
+        float p_val = P[k_idx * n + i];
+        float4 dout_val = float4(*(const device float4*)(d_out + base + uint(k_idx) * uint(C) + c_vec));
+        acc += p_val * dout_val;
+    }
+    *(device float4*)(dx + base + uint(i) * uint(C) + c_vec) = acc;
+
+} else {
+    // Scalar fallback
+    if ((int)c >= C) return;
+
+    float acc = 0.0f;
+    for (int k_idx = 0; k_idx < n; ++k_idx) {
+        acc += P[k_idx * n + i] * float(d_out[base + uint(k_idx) * uint(C) + c]);
+    }
+    dx[base + uint(i) * uint(C) + c] = acc;
+}

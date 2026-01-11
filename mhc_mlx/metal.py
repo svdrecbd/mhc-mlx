@@ -2608,17 +2608,21 @@ def stream_mix_backward_dx_metal(
     d_out_f = d_out.astype(mx.float32)
 
     kernel = _stream_mix_backward_dx_kernel(max_n)
+    
+    grid_c = C
+    if (C % 4) == 0:
+        grid_c = C // 4
+
     out = kernel(
         inputs=[M_f, d_out_f],
-        grid=(C, B, 1),
+        grid=(grid_c, B * n, 1),
         threadgroup=(threads_per_group, 1, 1),
         output_shapes=[d_out_f.shape],
         output_dtypes=[mx.float32],
     )[0]
-
+    
     return out
-
-
+    
     
 
 
@@ -2812,9 +2816,11 @@ def _mhc_fused_autograd_fn(
                 threads_per_group=threads_per_group,
                 verbose=False,
             )
-            dM = mhc_backward_dM_metal(x, dout, threads_per_group=threads_per_group)
-            dH_pre = mhc_backward_dH_pre_metal(x, dout, d_y_norm, inv_rms, threads_per_group=threads_per_group)
-            dH_post = mhc_backward_dH_post_metal(dout, d_y_norm, threads_per_group=threads_per_group)
+            dM = mhc_backward_dM_metal(x, dout, threads_per_group=threads_per_group, verbose=False)
+            dH_pre = mhc_backward_dH_pre_metal(
+                x, y_agg, d_y_norm, inv_rms, d_r, rms_weight, threads_per_group=threads_per_group, verbose=False
+            )
+            dH_post = mhc_backward_dH_post_metal(dout, d_y_norm, threads_per_group=threads_per_group, verbose=False)
             d_rms_weight = mhc_backward_rms_weight_metal(y_agg, inv_rms, dout, threads_per_group=threads_per_group)
 
         return _match_structure(primals, [dx, dM, dH_pre, dH_post, d_rms_weight])
