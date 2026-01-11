@@ -7,7 +7,7 @@ def test_rewire_linear():
     dims = 512
     n = 16
     inner = nn.Linear(dims, dims)
-    model = MHCRewire(inner, n=n)
+    model = MHCRewire(inner, dims=dims, n=n)
     
     x = mx.random.normal((2, dims))
     y = model(x)
@@ -18,8 +18,9 @@ def test_rewire_linear():
 
 def test_rewire_conv():
     """Test that it fails for non-preserving shapes (as expected)."""
-    inner = nn.Linear(512, 256)
-    model = MHCRewire(inner, n=32)
+    dims = 512
+    inner = nn.Linear(dims, 256)
+    model = MHCRewire(inner, dims=dims, n=32)
     
     x = mx.random.normal((1, 512))
     try:
@@ -39,7 +40,7 @@ def test_rewire_transformer_block():
             return self.lin(self.ln(x))
             
     d = 1024
-    model = MHCRewire(Block(d), n=32)
+    model = MHCRewire(Block(d), dims=d, n=32)
     x = mx.random.normal((1, 16, d))
     y = model(x)
     assert y.shape == (1, 16, d)

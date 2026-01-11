@@ -356,7 +356,7 @@ class MHCRewire(nn.Module):
         from mhc_mlx import MHCRewire
         
         # Wrap a standard Linear layer with 16 streams
-        layer = MHCRewire(nn.Linear(512, 512), n=16)
+        layer = MHCRewire(nn.Linear(512, 512), dims=512, n=16)
         
         x = mx.random.normal((1, 512))
         y = layer(x) # Returns H_post * (Linear(H_pre * x) + M * H_pre * x)
@@ -365,75 +365,50 @@ class MHCRewire(nn.Module):
     def __init__(
         self,
         inner: nn.Module,
+        dims: int,
         n: int = 32,
         **mhc_kwargs,
     ):
         super().__init__()
         self.inner = inner
         self.n = n
+        self.dims = dims
         
-        # Detect C from input/output of the inner module if possible
-        # or require it in kwargs.
-        self.mhc = None
-        self._mhc_kwargs = mhc_kwargs
+        if dims % n != 0:
+            raise ValueError(f"dims {dims} must be divisible by n={n}")
+        
+        self.mhc = MHCLayer(n=n, C=dims // n, **mhc_kwargs)
 
     def __call__(self, x: mx.array) -> mx.array:
-        # Initialize MHCLayer on first call to detect C automatically
-        if self.mhc is None:
-            B_total = x.size // x.shape[-1]
-            dims = x.shape[-1]
-            if dims % self.n != 0:
-                raise ValueError(f"Input dimension {dims} must be divisible by n={self.n}")
-            C = dims // self.n
-            self.mhc = MHCLayer(n=self.n, C=C, **self._mhc_kwargs)
-
-        B_orig = x.shape[:-1]
         dims = x.shape[-1]
+        if dims != self.dims:
+            raise ValueError(f"Input dims {dims} != expected {self.dims}")
         C = dims // self.n
-        
-        # Reshape to [B_total, n, C]
-        x_mhc = x.reshape(-1, self.n, C)
-        
-        # 1. Pre-scale (H_pre * x)
-        # Note: we use MHCLayer internals to avoid redundant Sinkhorn if training
-        H_pre_act, _ = activate_pre_post(self.mhc.H_pre_raw, self.mhc.H_post_raw)
-        x_pre = x_mhc * H_pre_act.reshape(1, self.n, 1)
-        
-        # 2. Inner Module F(H_pre * x)
-        x_inner_in = x_pre.reshape(x.shape)
-        y_inner = self.inner(x_inner_in)
-        
-        if y_inner.shape != x.shape:
-            raise ValueError(
-                f"MHCRewire requires inner module to preserve shape. "
-                f"Got {y_inner.shape} vs input {x.shape}"
-            )
-            
-        # 3. Post-combine (H_post * (y_inner + M * x_pre))
-        # We call the fused Metal path if enabled
-        y_inner_mhc = y_inner.reshape(-1, self.n, C)
-        
-        # We reuse the logic from MHCLayer.__call__ but with y_inner already computed
-        # This is essentially the post-combine step.
-        B_total = x_mhc.shape[0]
-        
-        # Get M
+
+        # Get learnable scales and mixing matrix
+        H_pre_act, H_post_act = activate_pre_post(self.mhc.H_pre_raw, self.mhc.H_post_raw)
         M = self.mhc.mixing_matrix()
-        _, H_post_act = activate_pre_post(self.mhc.H_pre_raw, self.mhc.H_post_raw)
+
+        # OPTIMIZATION: Weight Folding
+        if isinstance(self.inner, nn.Linear):
+            h_pre_expanded = mx.repeat(H_pre_act, C)
+            folded_weight = self.inner.weight * h_pre_expanded
+            y_inner = x @ folded_weight.T
+            if self.inner.bias is not None:
+                y_inner = y_inner + self.inner.bias
+        else:
+            # Fallback: explicit multiply
+            x_reshaped = x.reshape(-1, self.n, C)
+            x_pre = x_reshaped * H_pre_act.reshape(1, self.n, 1)
+            y_inner = self.inner(x_pre.reshape(x.shape))
+
+        # OPTIMIZATION: Residual Folding
+        M_folded = M * H_pre_act.reshape(1, -1)
         
-        # We can't use the 'fully fused' Agg+RMS+Mix+Add here because y_inner is external.
-        # But we CAN use the fused Mix+Add kernel.
-        from .metal import stream_mix_add_metal_autograd
+        x_reshaped = x.reshape(-1, self.n, C)
+        y_inner_reshaped = y_inner.reshape(-1, self.n, C)
         
-        # Simple mix + distribute + add
-        # x_mixed = M * x_pre
-        # out = H_post * (y_inner + x_mixed)
-        
-        # For now, let's use the standard decomposed steps or the MixAdd kernel
-        # if we want to be fast.
-        
-        # TODO: Optimize with a 'residual_fused' kernel that takes y_inner
-        x_mixed = mx.einsum('ij,...jd->...id', M, x_pre)
-        out = (y_inner_mhc + x_mixed) * H_post_act.reshape(1, self.n, 1)
+        x_mixed = mx.einsum('ij,...jd->...id', M_folded, x_reshaped)
+        out = (y_inner_reshaped + x_mixed) * H_post_act.reshape(1, self.n, 1)
         
         return out.reshape(x.shape)

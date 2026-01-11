@@ -39,7 +39,7 @@ import mlx.nn as nn
 from mhc_mlx import MHCRewire
 
 # Wrap a standard Linear layer (or a whole Transformer block)
-layer = MHCRewire(nn.Linear(512, 512), n=16)
+layer = MHCRewire(nn.Linear(512, 512), dims=512, n=16)
 
 x = mx.random.normal((1, 512))
 y = layer(x) # Computes: H_post * (Linear(H_pre * x) + M * H_pre * x)
