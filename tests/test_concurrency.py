@@ -47,12 +47,9 @@ def test_metal_multiprocessing():
         
     for p in processes:
         p.join()
-        if p.exitcode != 0:
-            print(f"Process failed with exit code {p.exitcode}")
-            return False
+        assert p.exitcode == 0, f"Process failed with exit code {p.exitcode}"
         
     print("\nAll processes completed. Metal multiprocessing test PASSED.")
-    return True
 
 if __name__ == "__main__":
     test_metal_multiprocessing()
