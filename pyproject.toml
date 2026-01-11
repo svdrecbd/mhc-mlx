@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mhc-mlx"
-version = "0.5.1"
+version = "0.5.2"
 description = "High-performance MLX implementation of Manifold-Constrained Hyper-Connections (mHC)"
 requires-python = ">=3.10"
 readme = "README.md"
@@ -44,7 +44,7 @@ bench = [
 
 [project.scripts]
 mhc-mlx-info = "mhc_mlx.diagnostics:main"
-mhc-mlx-bench = "scripts.benchmark:main"
+mhc-mlx-bench = "mhc_mlx.benchmark:main"
 
 [tool.setuptools]
 packages = ["mhc_mlx", "mlx_mhc"]

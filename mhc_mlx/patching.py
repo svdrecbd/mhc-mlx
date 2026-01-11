@@ -21,8 +21,10 @@ class AutoPatcher:
         """
         count = 0
         
-        # We iterate over named modules to replace them in-place
-        for name, module in model.named_modules():
+        # Convert to list first to ensure stable traversal while mutating
+        modules = list(model.named_modules())
+        
+        for name, module in modules:
             # Skip the root model itself to avoid recursion issues if passed directly
             if name == "":
                 continue
@@ -54,11 +56,11 @@ class AutoPatcher:
                 wrapped = MHCRewire(module, dims=dims, n=n_streams)
                 
                 # Replace in parent
-                if child_name.isdigit() and isinstance(parent, (list, tuple)):
+                if child_name.isdigit() and isinstance(parent, list):
                     parent[int(child_name)] = wrapped
                 elif isinstance(parent, dict):
                     parent[child_name] = wrapped
-                else:
+                elif not isinstance(parent, tuple):
                     setattr(parent, child_name, wrapped)
                 count += 1
                 
