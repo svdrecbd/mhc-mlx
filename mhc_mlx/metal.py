@@ -1027,7 +1027,7 @@ def stream_mix_add_rms_metal(
     y_agg: mx.array,
     inv_rms: mx.array,
     rms_weight: mx.array,
-    threads_per_group: int = 256,
+    threads_per_group: int | None = None,
     output_dtype: mx.Dtype | None = None,
     mix_kernel: str = "auto",
     verbose: bool = False,
@@ -1039,32 +1039,11 @@ def stream_mix_add_rms_metal(
     """
     if x.ndim != 3:
         raise ValueError(f"x must be [B, n, C], got shape {x.shape}")
-    if M.ndim != 2:
-        raise ValueError(f"M must be [n, n], got shape {M.shape}")
-    if H_post.ndim != 1:
-        raise ValueError(f"H_post must be [n], got shape {H_post.shape}")
-    if y_agg.ndim != 2:
-        raise ValueError(f"y_agg must be [B, C], got shape {y_agg.shape}")
-    if inv_rms.ndim != 1:
-        raise ValueError(f"inv_rms must be [B], got shape {inv_rms.shape}")
-    if rms_weight.ndim != 1:
-        raise ValueError(f"rms_weight must be [C], got shape {rms_weight.shape}")
-
     B, n, C = x.shape
-    if M.shape != (n, n):
-        raise ValueError(f"M must be shape (n,n)=( {n},{n} ), got {M.shape}")
-    if H_post.shape != (n,):
-        raise ValueError(f"H_post must be shape (n,)=( {n}, ), got {H_post.shape}")
-    if y_agg.shape != (B, C):
-        raise ValueError(f"y_agg must be shape (B,C)=( {B},{C} ), got {y_agg.shape}")
-    if inv_rms.shape != (B,):
-        raise ValueError(f"inv_rms must be shape (B,)=( {B}, ), got {inv_rms.shape}")
-    if rms_weight.shape != (C,):
-        raise ValueError(f"rms_weight must be shape (C,)=( {C}, ), got {rms_weight.shape}")
+    
+    if threads_per_group is None:
+        threads_per_group = _get_tuned_tpg("stream_mix_add", suggest_threads_per_group(C))
 
-    max_n = _validate_n(n)
-    if threads_per_group <= 0:
-        raise ValueError("threads_per_group must be positive")
     output_dtype = _normalize_output_dtype(output_dtype)
     mix_kernel = _normalize_mix_kernel(mix_kernel)
     if mix_kernel == "2d":
@@ -1249,7 +1228,7 @@ def stream_mix_add_rms_col_metal(
     y_agg: mx.array,
     inv_rms: mx.array,
     rms_weight: mx.array,
-    threads_per_group: int = 256,
+    threads_per_group: int | None = None,
     verbose: bool = False,
 ) -> mx.array:
     """Column-parallel stream mix add + RMS (thread per column)."""
@@ -1257,6 +1236,9 @@ def stream_mix_add_rms_col_metal(
         raise ValueError(f"x must be [B, n, C], got shape {x.shape}")
     B, n, C = x.shape
     max_n = _validate_n(n)
+    
+    if threads_per_group is None:
+        threads_per_group = _get_tuned_tpg("stream_mix_add", suggest_threads_per_group(C))
     
     if threads_per_group <= 0:
         raise ValueError("threads_per_group must be positive")
@@ -1607,7 +1589,7 @@ def mhc_fully_fused_metal(
     H_post: mx.array,
     rms_weight: mx.array,
     eps: float = 1e-5,
-    threads_per_group: int = 256,
+    threads_per_group: int | None = None,
     output_dtype: mx.Dtype | None = None,
     verbose: bool = False,
 ) -> mx.array:
@@ -1621,6 +1603,10 @@ def mhc_fully_fused_metal(
     B, n, C = x.shape
     max_n = _validate_n(n)
     
+    if threads_per_group is None:
+        # Heuristic is best for fully fused (one block covers C)
+        threads_per_group = suggest_threads_per_group(C)
+
     if threads_per_group <= 0:
         raise ValueError("threads_per_group must be positive")
     if threads_per_group > _MAX_TPG_ALLOWED:
@@ -1843,7 +1829,7 @@ def mhc_forward_fused_metal(
     H_post: mx.array,
     rms_weight: mx.array,
     eps: float = 1e-5,
-    threads_per_group: int = 256,
+    threads_per_group: int | None = None,
     output_dtype: mx.Dtype | None = None,
     mix_kernel: str = "auto",
     verbose: bool = False,
@@ -1887,10 +1873,11 @@ def mhc_forward_fused_metal(
         raise ValueError(f"rms_weight must be shape (C,)=( {C}, ), got {rms_weight.shape}")
 
     max_n = _validate_n(n)
-    if threads_per_group <= 0:
-        raise ValueError("threads_per_group must be positive")
-    if threads_per_group > _MAX_TPG_ALLOWED:
-        raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED} for the fused kernel")
+    if threads_per_group is not None:
+        if threads_per_group <= 0:
+            raise ValueError("threads_per_group must be positive")
+        if threads_per_group > _MAX_TPG_ALLOWED:
+            raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED} for the fused kernel")
 
     if verbose:
         _maybe_print_source(_mhc_forward_agg_source(max_n), "mhc_forward_agg", verbose=True)

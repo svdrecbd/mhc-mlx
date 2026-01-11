@@ -318,11 +318,12 @@ def _run_case(
     rms_weight = mx.ones((C,), dtype=mx.float32)
 
     tpg = args.threads_per_group
-    if tpg is None:
-        tpg = suggest_threads_per_group(C)
+    # For logging and mix_tpg calc, we need a value
+    tpg_val = tpg if tpg is not None else suggest_threads_per_group(C)
+    
     output_dtype = args.output_dtype
     mix_kernel = args.mix_kernel
-    mix_tpg = mix_add_rms_threadgroup_size(n, output_dtype, tpg, mix_kernel)
+    mix_tpg = mix_add_rms_threadgroup_size(n, output_dtype, tpg_val, mix_kernel)
 
     dispatch_policy_effective = args.dispatch_policy
 
@@ -330,7 +331,7 @@ def _run_case(
         n=n,
         C=C,
         use_metal=False,
-        threads_per_group=tpg,
+        threads_per_group=tpg_val, # Reference doesn't use it, but keeping logic same
         compile_reference=False,
         mix_kernel=mix_kernel,
     )
@@ -338,7 +339,7 @@ def _run_case(
         n=n,
         C=C,
         use_metal=True,
-        threads_per_group=tpg,
+        threads_per_group=tpg, # Pass None if args.tpg is None to enable auto-tuning
         auto_dispatch=(args.metal_dispatch == "auto"),
         compile_reference=False,
         dispatch_policy=dispatch_policy_effective,

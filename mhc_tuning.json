@@ -1,0 +1,5 @@
+{
+    "residual_add_agg": 512,
+    "stream_mix_add": 128,
+    "sinkhorn_128": 256
+}
