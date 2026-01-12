@@ -2,7 +2,10 @@ import mlx.core as mx
 import mlx.nn as nn
 import multiprocessing as mp
 import time
+import pytest
 from mhc_mlx import MHCLayer
+
+METAL_AVAILABLE = hasattr(mx.fast, "metal_kernel")
 
 def stress_proc(proc_id, n_iters=50):
     print(f"Process {proc_id} starting...")
@@ -33,6 +36,7 @@ def stress_proc(proc_id, n_iters=50):
         traceback.print_exc()
         raise e
 
+@pytest.mark.skipif(not METAL_AVAILABLE, reason="Metal acceleration not available")
 def test_metal_multiprocessing():
     """Stress test Metal kernels with multiple concurrent processes."""
     n_procs = 4 # Fewer than threads to be safe

@@ -73,7 +73,7 @@ mhc-mlx-bench --mode latency --C 512,2048,4096
 
 ## Key Optimizations
 
-- **"Zero-Cost" Weight Folding:** `MHCRewire` folds scaling directly into `nn.Linear` weights where possible.
+- **Universal Rewiring:** `MHCRewire` wraps any existing `nn.Module` (Linear, Conv2d) to apply mHC dynamics.
 - **Quantized Layer Support:** Seamlessly wraps `nn.QuantizedLinear` (4-bit/8-bit).
 - **Fully Fused Kernel:** Single-pass kernel for Aggregate + RMS + Mix + Add.
 - **Adaptive Dispatch:** Runtime heuristic selects the fastest kernel strategy for your workload.

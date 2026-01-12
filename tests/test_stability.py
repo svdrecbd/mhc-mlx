@@ -44,7 +44,25 @@ def test_sinkhorn_numerical_stability():
             print("FAILURE: Matrix is not doubly stochastic.")
             raise ValueError(f"Sinkhorn failed convergence. Row Err: {row_err}, Col Err: {col_err}")
             
-        print("SUCCESS: Stability test passed.")
+        print("SUCCESS: Metal Stability test passed.")
+        
+        # Test Reference path
+        print("\nTesting Reference Path Stability...")
+        layer_ref = MHCLayer(n=n, C=C, use_metal=False)
+        layer_ref.H_res_raw = mx.full((n, n), 100.0, dtype=mx.float32)
+        
+        M_ref = layer_ref.mixing_matrix()
+        mx.eval(M_ref)
+        
+        if mx.any(mx.isnan(M_ref)).item():
+            raise ValueError("Reference Sinkhorn produced NaNs")
+            
+        row_sums_ref = mx.sum(M_ref, axis=1)
+        row_err_ref = mx.max(mx.abs(row_sums_ref - 1.0)).item()
+        if row_err_ref > 1e-3:
+             raise ValueError(f"Reference Sinkhorn failed convergence. Row Err: {row_err_ref}")
+             
+        print("SUCCESS: Reference Stability test passed.")
         
     except Exception as e:
         print(f"Test crashed or failed: {e}")

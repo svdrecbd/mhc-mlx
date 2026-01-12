@@ -14,6 +14,9 @@ from mhc_mlx.reference import (
     mixing_matrix_from_logits,
 )
 
+METAL_AVAILABLE = hasattr(mx.fast, "metal_kernel")
+requires_metal = pytest.mark.skipif(not METAL_AVAILABLE, reason="Metal acceleration not available")
+
 
 def max_abs(a: mx.array, b: mx.array) -> float:
     return float(mx.max(mx.abs(a - b)).item())
@@ -27,6 +30,7 @@ def identity_residual(n: int, off_diag: float = 12.0) -> mx.array:
     return mx.full((n, n), -off_diag, dtype=mx.float32) + mx.eye(n, dtype=mx.float32) * off_diag
 
 
+@requires_metal
 @pytest.mark.parametrize(
     "n,iters,tol",
     [
@@ -45,12 +49,13 @@ def test_sinkhorn_matches_reference(n: int, iters: int, tol: float) -> None:
     assert err < tol
 
 
+@requires_metal
 @pytest.mark.parametrize(
     "dtype,tol",
     [
-        (mx.float16, 3e-2),
-        (mx.bfloat16, 2e-1),
         (mx.float32, 1e-5),
+        (mx.float16, 5e-3),
+        (mx.bfloat16, 2e-2),
     ],
 )
 def test_fused_forward_matches_reference(dtype: mx.Dtype, tol: float) -> None:
@@ -91,10 +96,11 @@ def test_fused_forward_matches_reference(dtype: mx.Dtype, tol: float) -> None:
     assert err < tol
 
 
+@requires_metal
 def test_fused_forward_matches_reference_n16() -> None:
-    mx.random.seed(2)
+    mx.random.seed(0)
+    B, n, C = 2, 16, 64
 
-    B, n, C = 1, 16, 64
     x = mx.random.normal((B, n, C)).astype(mx.bfloat16)
 
     H_pre_raw = mx.random.normal((n,)).astype(mx.float32)
@@ -129,11 +135,12 @@ def test_fused_forward_matches_reference_n16() -> None:
     assert err < 1e-4
 
 
+@requires_metal
 @pytest.mark.parametrize(
     "dtype,tol",
     [
-        (mx.float16, 3e-2),
-        (mx.bfloat16, 2e-1),
+        (mx.float16, 5e-3),
+        (mx.bfloat16, 2e-2),
     ],
 )
 def test_fused_forward_half_output(dtype: mx.Dtype, tol: float) -> None:
@@ -284,6 +291,7 @@ def test_latency_fallback_corner() -> None:
     assert rel_err < 1e-4
 
 
+@requires_metal
 def test_backward_matches_reference() -> None:
     mx.random.seed(9)
 

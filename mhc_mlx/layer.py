@@ -177,6 +177,9 @@ class MHCLayer(nn.Module):
             return False
         if not self.use_metal:
             return False
+        if n > 64:
+            # Metal kernels hard-capped at n=64
+            return False
         if not self.auto_dispatch:
             return True
         return True

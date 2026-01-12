@@ -63,7 +63,9 @@ def mixing_matrix_from_logits(H_res_raw: mx.array, iters: int = 20, eps: float =
     """
     if H_res_raw.ndim != 2 or H_res_raw.shape[0] != H_res_raw.shape[1]:
         raise ValueError(f"H_res_raw must be square [n, n], got shape {H_res_raw.shape}")
-    H = mx.exp(H_res_raw.astype(mx.float32))
+    # Max-subtraction for numerical stability
+    H_shifted = H_res_raw - mx.max(H_res_raw, axis=1, keepdims=True)
+    H = mx.exp(H_shifted.astype(mx.float32))
     return sinkhorn_knopp(H, iters=iters, eps=eps)
 
 
