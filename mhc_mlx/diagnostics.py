@@ -33,13 +33,13 @@ def diagnostics():
     elif device.type == mx.gpu:
         print("Metal acceleration: Available")
 
-    # Check for kernel files
-    kernel_path = os.path.join(os.path.dirname(__file__), "kernels")
-    if os.path.exists(kernel_path):
-        kernels = [f for f in os.listdir(kernel_path) if f.endswith(".metal")]
-        print(f"\nKernels found in {kernel_path}: {len(kernels)}")
-    else:
-        print(f"\nERROR: Kernel directory not found at {kernel_path}")
+    # Check for embedded kernels
+    try:
+        from . import kernels_embedded
+        kernels = [k for k in dir(kernels_embedded) if k.endswith("_METAL")]
+        print(f"\nEmbedded kernels found: {len(kernels)}")
+    except ImportError:
+        print("\nERROR: Embedded kernels module not found.")
 
 def main():
     diagnostics()

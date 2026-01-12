@@ -15,7 +15,7 @@ import platform
 from functools import lru_cache
 
 import mlx.core as mx
-from importlib import resources
+from . import kernels_embedded as K
 
 # Config loading
 _TUNING_CONFIG = {}
@@ -35,45 +35,38 @@ for path in _CONFIG_PATHS:
 def _get_tuned_tpg(kernel_name: str, default: int) -> int:
     return _TUNING_CONFIG.get(kernel_name, default)
 
-# Robust kernel path discovery using importlib.resources
-try:
-    _KERNEL_DIR = str(resources.files("mhc_mlx") / "kernels")
-except Exception:
-    # Fallback for older python or non-package installs
-    _KERNEL_DIR = os.path.join(os.path.dirname(__file__), "kernels")
-
-_STREAM_MIX_ADD_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add.metal")
-_STREAM_MIX_ADD_RMS_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms.metal")
-_STREAM_MIX_ADD_RMS_FP16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_fp16.metal")
-_STREAM_MIX_ADD_RMS_BF16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_bf16.metal")
-_STREAM_MIX_ADD_RMS_TILE_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_tile.metal")
-_STREAM_MIX_ADD_RMS_TILE2D_FP16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_tile2d_fp16.metal")
-_STREAM_MIX_ADD_RMS_TILE2D_BF16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_tile2d_bf16.metal")
-_STREAM_MIX_ADD_RMS_TILE_F32_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_tile_f32.metal")
-_STREAM_MIX_ADD_RMS_TILE_FP16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_tile_fp16.metal")
-_STREAM_MIX_ADD_RMS_TILE_BF16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_tile_bf16.metal")
-_STREAM_MIX_ADD_RMS_COL_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_col.metal")
-_STREAM_MIX_ADD_RMS_COL_BF16_PATH = os.path.join(_KERNEL_DIR, "stream_mix_add_rms_col_bf16.metal")
-_SINKHORN_PATH = os.path.join(_KERNEL_DIR, "sinkhorn_knopp.metal")
-_SINKHORN_BACKWARD_PATH = os.path.join(_KERNEL_DIR, "sinkhorn_knopp_backward.metal")
-_MHC_FUSED_PATH = os.path.join(_KERNEL_DIR, "mhc_fused.metal")
-_MHC_FORWARD_AGG_PATH = os.path.join(_KERNEL_DIR, "mhc_forward_agg.metal")
-_MHC_FORWARD_AGG_BF16_PATH = os.path.join(_KERNEL_DIR, "mhc_forward_agg_bf16.metal")
-_MHC_FORWARD_RMS_REDUCE_PATH = os.path.join(_KERNEL_DIR, "mhc_forward_rms_reduce.metal")
-_MHC_BACKWARD_PREP_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_prep.metal")
-_MHC_BACKWARD_PREP_TILE_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_prep_tile.metal")
-_MHC_BACKWARD_DX_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dx.metal")
-_MHC_BACKWARD_DX_COL_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dx_col.metal")
-_MHC_BACKWARD_GRADS_FUSED_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_grads_fused.metal")
-_MHC_BACKWARD_FUSED_DX_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_fused_dx.metal")
-_MHC_BACKWARD_DM_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dM.metal")
-_MHC_BACKWARD_DH_PRE_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dH_pre.metal")
-_MHC_BACKWARD_DH_POST_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dH_post.metal")
-_MHC_BACKWARD_DH_PRE_POST_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_dH_pre_post.metal")
-_MHC_BACKWARD_DRMS_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_d_rms_weight.metal")
-_MHC_BACKWARD_RMS_REDUCE_PATH = os.path.join(_KERNEL_DIR, "mhc_backward_rms_reduce.metal")
-_STREAM_MIX_BACKWARD_DX_PATH = os.path.join(_KERNEL_DIR, "stream_mix_backward_dx.metal")
-_RESIDUAL_ADD_AGG_PATH = os.path.join(_KERNEL_DIR, "residual_add_agg.metal")
+_STREAM_MIX_ADD_SOURCE = K.STREAM_MIX_ADD_METAL
+_STREAM_MIX_ADD_RMS_SOURCE = K.STREAM_MIX_ADD_RMS_METAL
+_STREAM_MIX_ADD_RMS_FP16_SOURCE = K.STREAM_MIX_ADD_RMS_FP16_METAL
+_STREAM_MIX_ADD_RMS_BF16_SOURCE = K.STREAM_MIX_ADD_RMS_BF16_METAL
+_STREAM_MIX_ADD_RMS_TILE_SOURCE = K.STREAM_MIX_ADD_RMS_TILE_METAL
+_STREAM_MIX_ADD_RMS_TILE2D_FP16_SOURCE = K.STREAM_MIX_ADD_RMS_TILE2D_FP16_METAL
+_STREAM_MIX_ADD_RMS_TILE2D_BF16_SOURCE = K.STREAM_MIX_ADD_RMS_TILE2D_BF16_METAL
+_STREAM_MIX_ADD_RMS_TILE_F32_SOURCE = K.STREAM_MIX_ADD_RMS_TILE_F32_METAL
+_STREAM_MIX_ADD_RMS_TILE_FP16_SOURCE = K.STREAM_MIX_ADD_RMS_TILE_FP16_METAL
+_STREAM_MIX_ADD_RMS_TILE_BF16_SOURCE = K.STREAM_MIX_ADD_RMS_TILE_BF16_METAL
+_STREAM_MIX_ADD_RMS_COL_SOURCE = K.STREAM_MIX_ADD_RMS_COL_METAL
+_STREAM_MIX_ADD_RMS_COL_BF16_SOURCE = K.STREAM_MIX_ADD_RMS_COL_BF16_METAL
+_SINKHORN_SOURCE = K.SINKHORN_KNOPP_METAL
+_SINKHORN_BACKWARD_SOURCE = K.SINKHORN_KNOPP_BACKWARD_METAL
+_MHC_FUSED_SOURCE = K.MHC_FUSED_METAL
+_MHC_FORWARD_AGG_SOURCE = K.MHC_FORWARD_AGG_METAL
+_MHC_FORWARD_AGG_BF16_SOURCE = K.MHC_FORWARD_AGG_BF16_METAL
+_MHC_FORWARD_RMS_REDUCE_SOURCE = K.MHC_FORWARD_RMS_REDUCE_METAL
+_MHC_BACKWARD_PREP_SOURCE = K.MHC_BACKWARD_PREP_METAL
+_MHC_BACKWARD_PREP_TILE_SOURCE = K.MHC_BACKWARD_PREP_TILE_METAL
+_MHC_BACKWARD_DX_SOURCE = K.MHC_BACKWARD_DX_METAL
+_MHC_BACKWARD_DX_COL_SOURCE = K.MHC_BACKWARD_DX_COL_METAL
+_MHC_BACKWARD_GRADS_FUSED_SOURCE = K.MHC_BACKWARD_GRADS_FUSED_METAL
+_MHC_BACKWARD_FUSED_DX_SOURCE = K.MHC_BACKWARD_FUSED_DX_METAL
+_MHC_BACKWARD_DM_SOURCE = K.MHC_BACKWARD_DM_METAL
+_MHC_BACKWARD_DH_PRE_SOURCE = K.MHC_BACKWARD_DH_PRE_METAL
+_MHC_BACKWARD_DH_POST_SOURCE = K.MHC_BACKWARD_DH_POST_METAL
+_MHC_BACKWARD_DH_PRE_POST_SOURCE = K.MHC_BACKWARD_DH_PRE_POST_METAL
+_MHC_BACKWARD_DRMS_SOURCE = K.MHC_BACKWARD_D_RMS_WEIGHT_METAL
+_MHC_BACKWARD_RMS_REDUCE_SOURCE = K.MHC_BACKWARD_RMS_REDUCE_METAL
+_STREAM_MIX_BACKWARD_DX_SOURCE = K.STREAM_MIX_BACKWARD_DX_METAL
+_RESIDUAL_ADD_AGG_SOURCE = K.RESIDUAL_ADD_AGG_METAL
 
 _MAX_N_ALLOWED = 64
 _MAX_TPG_ALLOWED = 1024
@@ -96,11 +89,6 @@ def _tile_tpg_x(n: int, requested: int) -> int:
     return max(1, int(tpg))
 
 
-def _read_source(path: str) -> str:
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read()
-
-
 def _format_float_literal(value: float) -> str:
     literal = f"{float(value):.8g}"
     if "e" not in literal and "." not in literal:
@@ -108,8 +96,7 @@ def _format_float_literal(value: float) -> str:
     return f"{literal}f"
 
 
-def _render_source(path: str, **replacements: str) -> str:
-    source = _read_source(path)
+def _render_source(source: str, **replacements: str) -> str:
     for key, value in replacements.items():
         source = source.replace(f"{{{{{key}}}}}", value)
     return source
@@ -205,7 +192,7 @@ def _stream_mix_add_kernel(max_n: int) -> object:
 
 def _stream_mix_add_source(max_n: int) -> str:
     return _render_source(
-        _STREAM_MIX_ADD_PATH,
+        _STREAM_MIX_ADD_SOURCE,
         MAX_N=str(int(max_n)),
     )
 
@@ -224,7 +211,7 @@ def _stream_mix_add_rms_kernel(max_n: int) -> object:
 
 def _stream_mix_add_rms_source(max_n: int) -> str:
     return _render_source(
-        _STREAM_MIX_ADD_RMS_PATH,
+        _STREAM_MIX_ADD_RMS_SOURCE,
         MAX_N=str(int(max_n)),
     )
 
@@ -243,7 +230,7 @@ def _stream_mix_add_rms_fp16_kernel(max_n: int) -> object:
 
 def _stream_mix_add_rms_fp16_source(max_n: int) -> str:
     return _render_source(
-        _STREAM_MIX_ADD_RMS_FP16_PATH,
+        _STREAM_MIX_ADD_RMS_FP16_SOURCE,
         MAX_N=str(int(max_n)),
     )
 
@@ -262,7 +249,7 @@ def _stream_mix_add_rms_bf16_kernel(max_n: int) -> object:
 
 def _stream_mix_add_rms_bf16_source(max_n: int) -> str:
     return _render_source(
-        _STREAM_MIX_ADD_RMS_BF16_PATH,
+        _STREAM_MIX_ADD_RMS_BF16_SOURCE,
         MAX_N=str(int(max_n)),
     )
 
@@ -281,7 +268,7 @@ def _stream_mix_add_rms_tile_kernel(max_n: int) -> object:
 
 def _stream_mix_add_rms_tile_source(max_n: int) -> str:
     return _render_source(
-        _STREAM_MIX_ADD_RMS_TILE_PATH,
+        _STREAM_MIX_ADD_RMS_TILE_SOURCE,
         MAX_N=str(int(max_n)),
     )
 
@@ -300,7 +287,7 @@ def _stream_mix_add_rms_tile2d_fp16_kernel(max_n: int) -> object:
 
 def _stream_mix_add_rms_tile2d_fp16_source(max_n: int) -> str:
     return _render_source(
-        _STREAM_MIX_ADD_RMS_TILE2D_FP16_PATH,
+        _STREAM_MIX_ADD_RMS_TILE2D_FP16_SOURCE,
         MAX_N=str(int(max_n)),
     )
 
@@ -319,7 +306,7 @@ def _stream_mix_add_rms_tile2d_bf16_kernel(max_n: int) -> object:
 
 def _stream_mix_add_rms_tile2d_bf16_source(max_n: int) -> str:
     return _render_source(
-        _STREAM_MIX_ADD_RMS_TILE2D_BF16_PATH,
+        _STREAM_MIX_ADD_RMS_TILE2D_BF16_SOURCE,
         MAX_N=str(int(max_n)),
     )
 
@@ -338,7 +325,7 @@ def _stream_mix_add_rms_col_kernel(max_n: int) -> object:
 
 def _stream_mix_add_rms_col_source(max_n: int) -> str:
     return _render_source(
-        _STREAM_MIX_ADD_RMS_COL_PATH,
+        _STREAM_MIX_ADD_RMS_COL_SOURCE,
         MAX_N=str(int(max_n)),
     )
 
@@ -357,7 +344,7 @@ def _stream_mix_add_rms_col_bf16_kernel(max_n: int) -> object:
 
 def _stream_mix_add_rms_col_bf16_source(max_n: int) -> str:
     return _render_source(
-        _STREAM_MIX_ADD_RMS_COL_BF16_PATH,
+        _STREAM_MIX_ADD_RMS_COL_BF16_SOURCE,
         MAX_N=str(int(max_n)),
     )
 
@@ -376,7 +363,7 @@ def _stream_mix_add_rms_tile_f32_kernel(tile_n: int, tile_c: int) -> object:
 
 def _stream_mix_add_rms_tile_f32_source(tile_n: int, tile_c: int) -> str:
     return _render_source(
-        _STREAM_MIX_ADD_RMS_TILE_F32_PATH,
+        _STREAM_MIX_ADD_RMS_TILE_F32_SOURCE,
         TILE_N=str(int(tile_n)),
         TILE_C=str(int(tile_c)),
     )
@@ -396,7 +383,7 @@ def _stream_mix_add_rms_tile_fp16_kernel(tile_n: int, tile_c: int) -> object:
 
 def _stream_mix_add_rms_tile_fp16_source(tile_n: int, tile_c: int) -> str:
     return _render_source(
-        _STREAM_MIX_ADD_RMS_TILE_FP16_PATH,
+        _STREAM_MIX_ADD_RMS_TILE_FP16_SOURCE,
         TILE_N=str(int(tile_n)),
         TILE_C=str(int(tile_c)),
     )
@@ -416,7 +403,7 @@ def _stream_mix_add_rms_tile_bf16_kernel(tile_n: int, tile_c: int) -> object:
 
 def _stream_mix_add_rms_tile_bf16_source(tile_n: int, tile_c: int) -> str:
     return _render_source(
-        _STREAM_MIX_ADD_RMS_TILE_BF16_PATH,
+        _STREAM_MIX_ADD_RMS_TILE_BF16_SOURCE,
         TILE_N=str(int(tile_n)),
         TILE_C=str(int(tile_c)),
     )
@@ -436,7 +423,7 @@ def _sinkhorn_kernel(max_n: int, iters: int, eps: float) -> object:
 
 def _sinkhorn_source(max_n: int, iters: int, eps: float) -> str:
     return _render_source(
-        _SINKHORN_PATH,
+        _SINKHORN_SOURCE,
         MAX_N=str(int(max_n)),
         MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
         ITERS=str(int(iters)),
@@ -465,7 +452,7 @@ def _mhc_fused_source(max_n: int, eps: float, output_dtype: mx.Dtype | None = No
             out_t = "bfloat"
 
     return _render_source(
-        _MHC_FUSED_PATH,
+        _MHC_FUSED_SOURCE,
         MAX_N=str(int(max_n)),
         MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
         EPS=_format_float_literal(eps),
@@ -487,7 +474,7 @@ def _mhc_forward_agg_kernel(max_n: int) -> object:
 
 def _mhc_forward_agg_source(max_n: int) -> str:
     return _render_source(
-        _MHC_FORWARD_AGG_PATH,
+        _MHC_FORWARD_AGG_SOURCE,
         MAX_N=str(int(max_n)),
         MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
     )
@@ -507,7 +494,7 @@ def _mhc_forward_agg_bf16_kernel(max_n: int) -> object:
 
 def _mhc_forward_agg_bf16_source(max_n: int) -> str:
     return _render_source(
-        _MHC_FORWARD_AGG_BF16_PATH,
+        _MHC_FORWARD_AGG_BF16_SOURCE,
         MAX_N=str(int(max_n)),
         MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
     )
@@ -527,7 +514,7 @@ def _mhc_forward_rms_reduce_kernel(eps: float) -> object:
 
 def _mhc_forward_rms_reduce_source(eps: float) -> str:
     return _render_source(
-        _MHC_FORWARD_RMS_REDUCE_PATH,
+        _MHC_FORWARD_RMS_REDUCE_SOURCE,
         MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
         EPS=_format_float_literal(eps),
     )
@@ -547,7 +534,7 @@ def _sinkhorn_backward_kernel(max_n: int, iters: int, eps: float) -> object:
 
 def _sinkhorn_backward_source(max_n: int, iters: int, eps: float) -> str:
     return _render_source(
-        _SINKHORN_BACKWARD_PATH,
+        _SINKHORN_BACKWARD_SOURCE,
         MAX_N=str(int(max_n)),
         MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
         ITERS=str(int(iters)),
@@ -569,7 +556,7 @@ def _mhc_backward_prep_kernel(max_n: int, eps: float) -> object:
 
 def _mhc_backward_prep_source(max_n: int, eps: float) -> str:
     return _render_source(
-        _MHC_BACKWARD_PREP_PATH,
+        _MHC_BACKWARD_PREP_SOURCE,
         MAX_N=str(int(max_n)),
         MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
         EPS=_format_float_literal(eps),
@@ -590,7 +577,7 @@ def _mhc_backward_prep_tile_kernel(max_n: int) -> object:
 
 def _mhc_backward_prep_tile_source(max_n: int) -> str:
     return _render_source(
-        _MHC_BACKWARD_PREP_TILE_PATH,
+        _MHC_BACKWARD_PREP_TILE_SOURCE,
         MAX_N=str(int(max_n)),
         MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
     )
@@ -610,7 +597,7 @@ def _mhc_backward_rms_reduce_kernel(eps: float) -> object:
 
 def _mhc_backward_rms_reduce_source(eps: float) -> str:
     return _render_source(
-        _MHC_BACKWARD_RMS_REDUCE_PATH,
+        _MHC_BACKWARD_RMS_REDUCE_SOURCE,
         MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
         EPS=_format_float_literal(eps),
     )
@@ -640,7 +627,7 @@ def _mhc_backward_dx_kernel(max_n: int) -> object:
 
 def _mhc_backward_dx_source(max_n: int) -> str:
     return _render_source(
-        _MHC_BACKWARD_DX_PATH,
+        _MHC_BACKWARD_DX_SOURCE,
         MAX_N=str(int(max_n)),
     )
 
@@ -669,7 +656,7 @@ def _mhc_backward_dx_col_kernel(max_n: int) -> object:
 
 def _mhc_backward_dx_col_source(max_n: int) -> str:
     return _render_source(
-        _MHC_BACKWARD_DX_COL_PATH,
+        _MHC_BACKWARD_DX_COL_SOURCE,
         MAX_N=str(int(max_n)),
     )
 
@@ -700,7 +687,7 @@ def _mhc_backward_grads_fused_kernel(max_n: int) -> object:
 
 def _mhc_backward_grads_fused_source(max_n: int) -> str:
     return _render_source(
-        _MHC_BACKWARD_GRADS_FUSED_PATH,
+        _MHC_BACKWARD_GRADS_FUSED_SOURCE,
         MAX_N=str(int(max_n)),
     )
 
@@ -719,7 +706,7 @@ def _mhc_backward_fused_dx_kernel(max_n: int, eps: float) -> object:
 
 def _mhc_backward_fused_dx_source(max_n: int, eps: float) -> str:
     return _render_source(
-        _MHC_BACKWARD_FUSED_DX_PATH,
+        _MHC_BACKWARD_FUSED_DX_SOURCE,
         MAX_N=str(int(max_n)),
         MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
         EPS=_format_float_literal(eps),
@@ -740,7 +727,7 @@ def _mhc_backward_dM_kernel() -> object:
 
 def _mhc_backward_dM_source() -> str:
     return _render_source(
-        _MHC_BACKWARD_DM_PATH,
+        _MHC_BACKWARD_DM_SOURCE,
         MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
     )
 
@@ -759,7 +746,7 @@ def _mhc_backward_dH_pre_kernel() -> object:
 
 def _mhc_backward_dH_pre_source() -> str:
     return _render_source(
-        _MHC_BACKWARD_DH_PRE_PATH,
+        _MHC_BACKWARD_DH_PRE_SOURCE,
         MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
     )
 
@@ -778,7 +765,7 @@ def _mhc_backward_dH_post_kernel() -> object:
 
 def _mhc_backward_dH_post_source() -> str:
     return _render_source(
-        _MHC_BACKWARD_DH_POST_PATH,
+        _MHC_BACKWARD_DH_POST_SOURCE,
         MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
     )
 
@@ -797,7 +784,7 @@ def _mhc_backward_dH_pre_post_kernel() -> object:
 
 def _mhc_backward_dH_pre_post_source() -> str:
     return _render_source(
-        _MHC_BACKWARD_DH_PRE_POST_PATH,
+        _MHC_BACKWARD_DH_PRE_POST_SOURCE,
         MAX_TPG=str(int(_MAX_TPG_ALLOWED)),
     )
 
@@ -815,7 +802,7 @@ def _mhc_backward_drms_kernel() -> object:
 
 
 def _mhc_backward_drms_source() -> str:
-    return _render_source(_MHC_BACKWARD_DRMS_PATH)
+    return _render_source(_MHC_BACKWARD_DRMS_SOURCE)
 
 
 @lru_cache(maxsize=8)
@@ -832,7 +819,7 @@ def _stream_mix_backward_dx_kernel(max_n: int) -> object:
 
 def _stream_mix_backward_dx_source(max_n: int) -> str:
     return _render_source(
-        _STREAM_MIX_BACKWARD_DX_PATH,
+        _STREAM_MIX_BACKWARD_DX_SOURCE,
         MAX_N=str(int(max_n)),
     )
 
@@ -1047,7 +1034,8 @@ def stream_mix_add_rms_metal(
     if x.ndim != 3:
         raise ValueError(f"x must be [B, n, C], got shape {x.shape}")
     B, n, C = x.shape
-    
+    max_n = _validate_n(n)
+
     if threads_per_group is None:
         threads_per_group = _get_tuned_tpg("stream_mix_add", suggest_threads_per_group(C))
 
@@ -1676,7 +1664,7 @@ def _residual_add_agg_source(max_n: int, output_dtype: mx.Dtype | None = None) -
             out_t = "bfloat"
 
     return _render_source(
-        _RESIDUAL_ADD_AGG_PATH,
+        _RESIDUAL_ADD_AGG_SOURCE,
         MAX_N=str(int(max_n)),
         OUT_T=out_t,
     )
@@ -1758,6 +1746,9 @@ def mhc_forward_agg_metal(
     B, n, C = x.shape
     if H_pre.shape != (n,):
         raise ValueError(f"H_pre must be shape (n,)=( {n}, ), got {H_pre.shape}")
+
+    if threads_per_group is None:
+        threads_per_group = _get_tuned_tpg("mhc_forward_agg", 256)
 
     max_n = _validate_n(n)
     if threads_per_group <= 0:
@@ -1880,11 +1871,13 @@ def mhc_forward_fused_metal(
         raise ValueError(f"rms_weight must be shape (C,)=( {C}, ), got {rms_weight.shape}")
 
     max_n = _validate_n(n)
-    if threads_per_group is not None:
-        if threads_per_group <= 0:
-            raise ValueError("threads_per_group must be positive")
-        if threads_per_group > _MAX_TPG_ALLOWED:
-            raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED} for the fused kernel")
+    if threads_per_group is None:
+        threads_per_group = 256
+
+    if threads_per_group <= 0:
+        raise ValueError("threads_per_group must be positive")
+    if threads_per_group > _MAX_TPG_ALLOWED:
+        raise ValueError(f"threads_per_group must be <= {_MAX_TPG_ALLOWED} for the fused kernel")
 
     if verbose:
         _maybe_print_source(_mhc_forward_agg_source(max_n), "mhc_forward_agg", verbose=True)
