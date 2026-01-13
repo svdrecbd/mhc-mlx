@@ -13,7 +13,7 @@ pip install mhc-mlx
 ```
 
 ## Compatibility
-- **Primary:** macOS + Apple Silicon (M1, M2, M3, M4) for peak performance.
+- **Primary:** macOS + Apple Silicon for peak performance.
 - **Support:** Linux (CPU/CUDA) and Intel Macs via automatic pure-MLX compiled fallback.
 - **Software:** MLX >= 0.30.0.
 
